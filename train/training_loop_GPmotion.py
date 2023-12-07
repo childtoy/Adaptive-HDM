@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 import numpy as np
 import random
-
+import pickle as pkl
 import blobfile as bf
 import torch
 from torch.optim import AdamW
@@ -31,8 +31,6 @@ class TrainLoop:
     def __init__(self, args, train_platform, model, diffusion, data):
         self.args = args
         self.dataset = args.dataset
-        self.param_lenK = np.load(args.param_lenK_path)
-        self.num_len = len(self.param_lenK)
         self.train_platform = train_platform
         self.model = model
         self.diffusion = diffusion
@@ -49,6 +47,9 @@ class TrainLoop:
         self.weight_decay = args.weight_decay
         self.lr_anneal_steps = args.lr_anneal_steps
     
+        with open(args.param_lenK_path, 'rb') as f : 
+            self.param_lenK = pkl.load(f)
+        self.num_len = len(self.param_lenK['K_param'])
         self.step = 0
         self.resume_step = 0
         self.global_batch = self.batch_size # * dist.get_world_size()
@@ -223,13 +224,15 @@ class TrainLoop:
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
             len_idx = random.randint(0, self.num_len)
-            K_param = self.param_lenK[len_idx]
+            K_param = self.param_lenK['K_param'][len_idx]
+            len_param = self.param_lenK['len_param'][len_idx]
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,
                 micro,  # [bs, ch, image_size, image_size]
                 t,  # [bs](int) sampled timesteps
                 K_param,
+                len_param,
                 model_kwargs=micro_cond,
                 dataset=self.data.dataset
             )

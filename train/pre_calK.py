@@ -21,7 +21,7 @@ def main():
     fps = 20
     num_dim = 263 # data rep dimension
     num_len = 20 # number of length parameters
-    save_path = './K_param_data'+str(num_data)+'_fps'+str(fps)+'_dim'+str(num_dim)+'_len'+str(num_len)+''
+    save_path = './K_param_data'+str(num_data)+'_fps'+str(fps)+'_dim'+str(num_dim)+'_len'+str(num_len)+'.pkl'
     
     t_data = np.linspace(start=0.0, stop=(num_data/fps), num=num_data).reshape((-1,1)) # num frames : 128, fps : 20 
     lens_array = np.linspace(0.01,num_data/fps,num_len) # GP kernel length param array
@@ -34,7 +34,10 @@ def main():
             K = K + 1e-6*np.eye(num_data,num_data)
             U, V = np.linalg.eigh(K,UPLO='L')
             decom_K[len_idx,d_idx,:,:] = V @ np.diag(np.sqrt(U)) # [L x L]
-    np.save(save_path, decom_K)
-    print(decom_K[:100])
+    
+    data = {'K_param' : decom_K, 'len_param' : lens_array}
+    with open(save_path, 'wb') as f : 
+        pkl.dump(data, f)
+
 if __name__ == "__main__":
     main()

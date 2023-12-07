@@ -1243,7 +1243,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, K_params=None, model_kwargs=None, noise=None, dataset=None):
+    def training_losses(self, model, x_start, t, K_params=None, len_param=None, model_kwargs=None, noise=None, dataset=None):
         """
         Compute training losses for a single timestep.
 
@@ -1294,7 +1294,7 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t,self._scale_timesteps(t), K_params, **model_kwargs)
+            model_output = model(x_t,self._scale_timesteps(t), len_param, **model_kwargs)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,
