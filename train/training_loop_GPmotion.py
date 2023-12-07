@@ -138,8 +138,6 @@ class TrainLoop:
 
                 motion = motion.to(self.device)
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
-                print('motion', motion.shape)
-                sys.exit()
                 self.run_step(motion, cond)
                 if self.step % self.log_interval == 0:
                     for k,v in logger.get_current().dumpkvs().items():

@@ -17,9 +17,9 @@ def k_se(x1, x2, gain=1.0, hyp_len=1.0):
     return K
 
 def main():
-    num_data = 128 # number of frames
+    num_data = 196 # number of frames
     fps = 20
-    num_dim = 144 # data rep dimension
+    num_dim = 263 # data rep dimension
     num_len = 20 # number of length parameters
     save_path = './K_param_data'+str(num_data)+'_fps'+str(fps)+'_dim'+str(num_dim)+'_len'+str(num_len)+''
     

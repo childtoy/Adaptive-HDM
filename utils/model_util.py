@@ -1,4 +1,4 @@
-from model.mdm import MDM, MDM_GP
+from model.mdm import MDM
 from diffusion import gaussian_diffusion as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
