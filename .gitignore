@@ -133,4 +133,5 @@ dataset
 save
 glove
 body_models
+*.npy
 
