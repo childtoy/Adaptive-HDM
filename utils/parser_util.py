@@ -106,6 +106,8 @@ def add_data_options(parser):
 
 def add_training_options(parser):
     group = parser.add_argument_group('training')
+    group.add_argument("--param_lenK_path", default= './K_param_data128_fps20_dim144_len20.npy', type=str,
+                       help="Path to GP parameter bag.")
     group.add_argument("--save_dir", required=True, type=str,
                        help="Path to save checkpoints and results.")
     group.add_argument("--overwrite", action='store_true',

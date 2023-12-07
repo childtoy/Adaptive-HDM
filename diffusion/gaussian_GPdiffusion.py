@@ -1,10 +1,3 @@
-# This code is based on https://github.com/openai/guided-diffusion
-"""
-This code started out as a PyTorch port of Ho et al's diffusion models:
-https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/diffusion_utils_2.py
-
-Docstrings have been added, as well as DDIM sampling and a new collection of beta schedules.
-"""
 
 import enum
 import math
@@ -16,7 +9,7 @@ from copy import deepcopy
 from diffusion.nn import mean_flat, sum_flat
 from diffusion.losses import normal_kl, discretized_gaussian_log_likelihood
 from data_loaders.humanml.scripts import motion_process
-
+from scipy.spatial import distance
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps, scale_betas=1.):
     """
     Get a pre-defined beta schedule for the given name.
@@ -100,7 +93,13 @@ class LossType(enum.Enum):
         return self == LossType.KL or self == LossType.RESCALED_KL
 
 
-class GaussianDiffusion:
+
+def k_se(x1, x2, gain=1.0, hyp_len=1.0):
+
+    D_sq = distance.cdist(x1/hyp_len, x2/hyp_len, 'sqeuclidean')
+    K = gain * np.exp(-D_sq)
+    return K
+class GaussianDiffusion_GP:
     """
     Utilities for training and sampling diffusion models.
 
@@ -134,28 +133,31 @@ class GaussianDiffusion:
         lambda_root_vel=0.,
         lambda_vel_rcxyz=0.,
         lambda_fc=0.,
+        param_lenK=None,
     ):
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
         self.loss_type = loss_type
         self.rescale_timesteps = rescale_timesteps
         self.data_rep = data_rep
-
         if data_rep != 'rot_vel' and lambda_pose != 1.:
             raise ValueError('lambda_pose is relevant only when training on velocities!')
-        self.lambda_pose = lambda_pose
-        self.lambda_orient = lambda_orient
-        self.lambda_loc = lambda_loc
+        
+        self.param_lenK = param_lenK
+    
+        # self.lambda_pose = lambda_pose
+        # self.lambda_orient = lambda_orient
+        # self.lambda_loc = lambda_loc
 
-        self.lambda_rcxyz = lambda_rcxyz
-        self.lambda_vel = lambda_vel
-        self.lambda_root_vel = lambda_root_vel
-        self.lambda_vel_rcxyz = lambda_vel_rcxyz
-        self.lambda_fc = lambda_fc
+        # self.lambda_rcxyz = lambda_rcxyz
+        # self.lambda_vel = lambda_vel
+        # self.lambda_root_vel = lambda_root_vel
+        # self.lambda_vel_rcxyz = lambda_vel_rcxyz
+        # self.lambda_fc = lambda_fc
 
-        if self.lambda_rcxyz > 0. or self.lambda_vel > 0. or self.lambda_root_vel > 0. or \
-                self.lambda_vel_rcxyz > 0. or self.lambda_fc > 0.:
-            assert self.loss_type == LossType.MSE, 'Geometric losses are supported by MSE loss type only!'
+        # if self.lambda_rcxyz > 0. or self.lambda_vel > 0. or self.lambda_root_vel > 0. or \
+        #         self.lambda_vel_rcxyz > 0. or self.lambda_fc > 0.:
+        #     assert self.loss_type == LossType.MSE, 'Geometric losses are supported by MSE loss type only!'
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -195,20 +197,19 @@ class GaussianDiffusion:
             * np.sqrt(alphas)
             / (1.0 - self.alphas_cumprod)
         )
-
         self.l2_loss = lambda a, b: (a - b) ** 2  # th.nn.MSELoss(reduction='none')  # must be None for handling mask later on.
 
     def masked_l2(self, a, b, mask):
         # assuming a.shape == b.shape == bs, J, Jdim, seqlen
         # assuming mask.shape == bs, 1, 1, seqlen
         loss = self.l2_loss(a, b)
-        loss = sum_flat(loss * mask.float())  # gives \sigma_euclidean over unmasked elements
+        loss = sum_flat(loss)  # gives \sigma_euclidean over unmasked elements
         n_entries = a.shape[1] * a.shape[2]
-        non_zero_elements = sum_flat(mask) * n_entries
+        # non_zero_elements = sum_flat(mask) * n_entries
         # print('mask', mask.shape)
         # print('non_zero_elements', non_zero_elements)
         # print('loss', loss)
-        mse_loss_val = loss / non_zero_elements
+        mse_loss_val = loss
         # print('mse_loss_val', mse_loss_val)
         return mse_loss_val
 
@@ -230,7 +231,7 @@ class GaussianDiffusion:
         )
         return mean, variance, log_variance
 
-    def q_sample(self, x_start, t, K_params=None, noise=None):
+    def q_sample(self, x_start, t, noise=None):
         """
         Diffuse the dataset for a given number of diffusion steps.
 
@@ -303,12 +304,12 @@ class GaussianDiffusion:
         B, C = x.shape[:2]
         assert t.shape == (B,)
         model_output = model(x, self._scale_timesteps(t), **model_kwargs)
-
-        if 'inpainting_mask' in model_kwargs['y'].keys() and 'inpainted_motion' in model_kwargs['y'].keys():
-            inpainting_mask, inpainted_motion = model_kwargs['y']['inpainting_mask'], model_kwargs['y']['inpainted_motion']
-            assert self.model_mean_type == ModelMeanType.START_X, 'This feature supports only X_start pred for mow!'
-            assert model_output.shape == inpainting_mask.shape == inpainted_motion.shape
-            model_output = (model_output * ~inpainting_mask) + (inpainted_motion * inpainting_mask)
+        # model_kwargs['y'] = {}
+        # if 'inpainting_mask' in model_kwargs['y'].keys() and 'inpainted_motion' in model_kwargs['y'].keys():
+        #     inpainting_mask, inpainted_motion = model_kwargs['y']['inpainting_mask'], model_kwargs['y']['inpainted_motion']
+        #     assert self.model_mean_type == ModelMeanType.START_X, 'This feature supports only X_start pred for mow!'
+        #     assert model_output.shape == inpainting_mask.shape == inpainted_motion.shape
+        #     model_output = (model_output * ~inpainting_mask) + (inpainted_motion * inpainting_mask)
             # print('model_output', model_output.shape, model_output)
             # print('inpainting_mask', inpainting_mask.shape, inpainting_mask[0,0,0,:])
             # print('inpainted_motion', inpainted_motion.shape, inpainted_motion)
@@ -530,6 +531,15 @@ class GaussianDiffusion:
             model_kwargs=model_kwargs,
         )
         noise = th.randn_like(x)
+        noise_expand = noise.squeeze(2).unsqueeze(-1)
+        # noise_expand = noise[:,:,:,None] # [B x D x L x 1]
+        
+        
+        K_chols = th.Tensor(self.K_chols).to(x.device)        
+        K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)) # [B x D x L x L]
+        noise = K_chols_torch_tile @ noise_expand.to(x.device) # [B x D x L x 1]
+        noise = noise.squeeze(dim=3) # [B x D x L]
+        noise = noise.unsqueeze(2)
         # print('const_noise', const_noise)
         if const_noise:
             noise = noise[[0]].repeat(x.shape[0], 1, 1, 1)
@@ -1224,7 +1234,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, K_params=None, model_kwargs=None, noise=None, dataset=None):
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, dataset=None):
         """
         Compute training losses for a single timestep.
 
@@ -1240,7 +1250,7 @@ class GaussianDiffusion:
 
         # enc = model.model._modules['module']
         enc = model.model
-        mask = model_kwargs['y']['mask']
+        mask = None
         get_xyz = lambda sample: enc.rot2xyz(sample, mask=None, pose_rep=enc.pose_rep, translation=enc.translation,
                                              glob=enc.glob,
                                              # jointstype='vertices',  # 3.4 iter/sec # USED ALSO IN MotionCLIP
@@ -1251,9 +1261,8 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-        if K_params is not None : 
             noise_expand = noise.squeeze(2).unsqueeze(-1)
-            K_chols = th.Tensor(K_params).to(x_start.device)
+            K_chols = th.Tensor(self.K_chols).to(x_start.device)
             K_chols_torch_tile = th.tile(input=K_chols,dims=(x_start.shape[0],1,1,1)) # [B x D x L x L]
             noise = K_chols_torch_tile @ noise_expand.to(x_start.device) # [B x D x L x 1]
             noise = noise.squeeze(dim=3) # [B x D x L]
@@ -1274,8 +1283,7 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), K_params, **model_kwargs)
-
+            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
             if self.model_var_type in [
                 ModelVarType.LEARNED,
                 ModelVarType.LEARNED_RANGE,
@@ -1310,7 +1318,6 @@ class GaussianDiffusion:
             terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
             target_xyz, model_output_xyz = None, None
-
             if self.lambda_rcxyz > 0.:
                 target_xyz = get_xyz(target)  # [bs, nvertices(vertices)/njoints(smpl), 3, nframes]
                 model_output_xyz = get_xyz(model_output)  # [bs, nvertices, 3, nframes]
