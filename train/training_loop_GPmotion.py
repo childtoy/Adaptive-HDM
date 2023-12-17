@@ -223,16 +223,17 @@ class TrainLoop:
             micro_cond = cond
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
-            len_idx = random.randint(0, self.num_len)
+            len_idx = random.randint(0, self.num_len-1)
             K_param = self.param_lenK['K_param'][len_idx]
             len_param = self.param_lenK['len_param'][len_idx]
+            len_param = torch.Tensor([len_param]).to(self.device).repeat(batch.shape[0],1).reshape(batch.shape[0],1)
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,
                 micro,  # [bs, ch, image_size, image_size]
                 t,  # [bs](int) sampled timesteps
-                K_param,
-                len_param,
+                K_params=K_param,
+                len_param=len_param,
                 model_kwargs=micro_cond,
                 dataset=self.data.dataset
             )

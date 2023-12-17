@@ -37,7 +37,7 @@ class MDM(nn.Module):
         self.activation = activation
         self.clip_dim = clip_dim
         self.action_emb = kargs.get('action_emb', None)
-        self.len_embedding = nn.Parameter(torch.randn(20, latent_dim))
+        
         self.input_feats = self.njoints * self.nfeats
 
         self.normalize_output = kargs.get('normalize_encoder_output', False)
@@ -88,7 +88,12 @@ class MDM(nn.Module):
             if 'action' in self.cond_mode:
                 self.embed_action = EmbedAction(self.num_actions, self.latent_dim)
                 print('EMBED ACTION')
-
+        self.len_embedding = nn.Sequential(
+                nn.Linear(in_features=1, out_features=self.latent_dim),
+                nn.SiLU(),
+                nn.Linear(in_features=self.latent_dim, out_features=self.latent_dim),
+            )
+        
         self.output_process = OutputProcess(self.data_rep, self.input_feats, self.latent_dim, self.njoints,
                                             self.nfeats)
 
