@@ -196,7 +196,6 @@ def forward_sample(x0_batch,t_batch,dc,M=None):
         if isinstance(M, list): # if M is a list,
             M_use = random.choice(M)
         else:
-            print('eval')
             M_use = M # [L x L]
         M_exp = M_use[None,None,:,:].expand(B,C,L,L) # [L x L] => [B x C x L x L]
         noise_exp = noise[:,:,:,None] # [B x C x L x 1]
