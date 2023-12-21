@@ -71,6 +71,7 @@ def add_diffusion_options(parser):
                        help="Number of diffusion steps (denoted T in the paper)")
     group.add_argument("--sigma_small", default=True, type=bool, help="Use smaller sigma values.")
 
+    group.add_argument("--pred_xstart", default=True, type=bool, help="Prediction xstart. If false pred noise.")
 
 def add_model_options(parser):
     group = parser.add_argument_group('model')
@@ -98,7 +99,7 @@ def add_model_options(parser):
 
 def add_data_options(parser):
     group = parser.add_argument_group('dataset')
-    group.add_argument("--dataset", default='humanml', choices=['humanml', 'kit', 'humanact12', 'uestc'], type=str,
+    group.add_argument("--dataset", default='humanml', choices=['humanml','humanml2', 'kit', 'humanact12', 'uestc'], type=str,
                        help="Dataset name (choose from list).")
     group.add_argument("--data_dir", default="", type=str,
                        help="If empty, will use defaults according to the specified dataset.")
@@ -206,7 +207,7 @@ def add_evaluation_options(parser):
 def get_cond_mode(args):
     if args.unconstrained:
         cond_mode = 'no_cond'
-    elif args.dataset in ['kit', 'humanml']:
+    elif args.dataset in ['kit', 'humanml', 'humanml2']:
         cond_mode = 'text'
     else:
         cond_mode = 'action'

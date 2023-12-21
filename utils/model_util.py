@@ -34,6 +34,10 @@ def get_model_args(args, data):
         data_rep = 'hml_vec'
         njoints = 263
         nfeats = 1
+    if args.dataset == 'humanml2':
+        # data_rep = 'hml_vec'
+        njoints = 138
+        nfeats = 1
     elif args.dataset == 'kit':
         data_rep = 'hml_vec'
         njoints = 251
@@ -49,7 +53,8 @@ def get_model_args(args, data):
 
 def create_gaussian_diffusion(args):
     # default params
-    predict_xstart = True  # we always predict x_start (a.k.a. x0), that's our deal!
+    predict_xstart = args.pred_xstart  # we always predict x_start (a.k.a. x0), that's our deal!
+    # predict_xstart = False  # we always predict x_start (a.k.a. x0), that's our deal!
     steps = 1000
     scale_beta = 1.  # no scaling
     timestep_respacing = ''  # can be used for ddim sampling, we don't use it.
