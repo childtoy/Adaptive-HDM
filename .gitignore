@@ -129,7 +129,7 @@ dmypy.json
 .pyre/
 
 
-dataset
+dataset/
 save
 glove
 body_models
