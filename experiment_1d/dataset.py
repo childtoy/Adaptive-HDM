@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import torch as th
@@ -29,10 +30,13 @@ def get_1d_training_data(
     lc        = 'k',
     lw        = 1,
     verbose   = True,
+    output    = './',
+    len_param = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
     ):
     """ 
         1-D training data
     """
+    true_length = None
     hyp_lens = None
     if seed is not None:
         np.random.seed(seed=seed)
@@ -47,7 +51,8 @@ def get_1d_training_data(
                 n_traj   = n_traj
             )
         ).to(th.float32).to(device) # [n_traj x L]
-    elif traj_type == 'gp2':
+
+    elif traj_type == 'gp2': # 기존에 실험했던 correlated noise의 범위와 다르게 실험 (2번 실험)
         traj_np = np.zeros((n_traj,L))
         hyp_len_np = np.zeros((n_traj,1))
         hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
@@ -67,6 +72,68 @@ def get_1d_training_data(
         hyp_lens = th.from_numpy(
             hyp_len_np
         ).to(th.float32).to(device)
+
+    elif traj_type == 'gp3': # len_param 범위와 data 범위가 다른 실험 (3번 실험)
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        hyp_len_candidate = [0.0001, 0.001, 0.005, 0.01, 
+                            0.017, 0.05, 0.1, 0.16,
+                            0.2, 0.25, 0.28, 0.3, 0.35,
+                            0.4, 0.5, 0.6, 0.7, 0.8, 1.0]
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,len(hyp_len_candidate))
+            traj_np[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] =  hyp_len_candidate[rand_idx]
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+
+    elif traj_type == 'gp4': # zero padding 실험 (4번 실험)
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            traj_np[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] = hyp_len_candidate[rand_idx]
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+
+        zero_padding_idx = np.random.randint(0, traj.shape[0], int(traj.shape[0]*0.3))
+        np.random.shuffle(zero_padding_idx)
+        group = np.array_split(zero_padding_idx, 3)
+        true_length = th.Tensor([128] * traj.shape[0])
+        
+        
+        for i in range(1, len(group)+1):
+            rate = 0.1 * i
+            start_zero = int(len(group[i-1])*rate)
+            front = traj[group[i-1], :-int(traj.shape[1]*rate)]
+            back = th.from_numpy(np.zeros((1, int(traj.shape[1]*rate))).repeat(100).reshape(100,-1)).to(th.float32).to(device)
+            traj[group[i-1],:] = th.concat([front, back], dim=1)
+            true_length[group[i-1]] = start_zero - 1
+            
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+        true_length = true_length.to(th.float32).to(device)
+
     elif traj_type == 'step':
         traj_np = np.zeros((n_traj,L))
         for i_idx in range(n_traj):
@@ -139,9 +206,10 @@ def get_1d_training_data(
         plt.xlabel('Time',fontsize=10)
         plt.title('Trajectory type:[%s]'%(traj_type),fontsize=10)
         plt.show()
+        plt.savefig(os.path.join(output, 'origin_traj.png'))
     # Print
     x_0 = traj[:,None,:] # [N x C x L]
     if verbose:
         print ("x_0:[%s]"%(get_torch_size_string(x_0)))
     # Out
-    return times,x_0, hyp_lens
+    return times,x_0, hyp_lens, true_length
