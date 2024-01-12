@@ -136,3 +136,4 @@ body_models
 *.npy
 *.pkl
 *.pt
+*.sh
