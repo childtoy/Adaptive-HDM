@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import torch as th
@@ -55,6 +56,7 @@ def plot_1xN_torch_img_tensor(
 def plot_1xN_torch_traj_tensor(
     times,
     x_torch,
+    output_path,
     title_str_list = None,
     title_fontsize = 20,
     ylim           = None,
@@ -76,7 +78,8 @@ def plot_1xN_torch_traj_tensor(
         if ylim:
             plt.ylim(ylim)
     plt.tight_layout()
-    plt.show()    
+    plt.show()
+    plt.savefig()
 
 def print_model_parameters(model):
     """ 
@@ -247,7 +250,8 @@ def plot_ddpm_1d_result(
     lw_gt=1,lw_sample=1/2,
     ls_gt='-',ls_sample='-',
     lc_gt='b',lc_sample='k',
-    ylim=(-4,+4),figsize=(6,3),title_str=None
+    ylim=(-4,+4),figsize=(6,3),title_str=None,
+    output='./', len_param=0.1
     ):
     """
     :param times: [L x 1] ndarray
@@ -290,10 +294,12 @@ def plot_ddpm_1d_result(
     plt.xlim([0.0,1.0]); plt.ylim(ylim)
     plt.xlabel('Time',fontsize=8)
     if title_str is None:
-        plt.title('Groundtruth and Generated trajectories',fontsize=10)
+        plt.title(f'Groundtruth and Generated trajectories of {len_param}',fontsize=10)
     else:
         plt.title(title_str,fontsize=10)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(os.path.join(output, f'generated_{len_param}.png'))
 
 
 
