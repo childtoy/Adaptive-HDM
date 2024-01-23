@@ -36,21 +36,58 @@ def get_1d_training_data(
     """ 
         1-D training data
     """
+    real_param = []
     true_length = None
     hyp_lens = None
     if seed is not None:
         np.random.seed(seed=seed)
     times = np.linspace(start=0.0,stop=1.0,num=L).reshape((-1,1)) # [L x 1]
-    if traj_type == 'gp':
-        traj = th.from_numpy(
-            gp_sampler(
+    if traj_type == 'gp1':
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            real_param.append(hyp_len_candidate[rand_idx])
+            traj_np[i_idx,:] = gp_sampler(
                 times    = times,
                 hyp_gain = 2.0,
-                hyp_len  = 0.2,
+                hyp_len  = hyp_len_candidate[rand_idx],
                 meas_std = 1e-8,
-                n_traj   = n_traj
-            )
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] =  hyp_len_candidate[rand_idx]
+        traj = th.from_numpy(
+            traj_np
         ).to(th.float32).to(device) # [n_traj x L]
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+        real_param = th.Tensor(real_param)
+        real_param = real_param.to(th.float32).to(device)
+    
+    elif traj_type == 'gp1_one':
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        hyp_len_candidate = [0.2]
+        for i_idx in range(n_traj):
+            real_param.append(hyp_len_candidate[0])
+            traj_np[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[0],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] =  hyp_len_candidate[0]
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+        real_param = th.Tensor(real_param)
+        real_param = real_param.to(th.float32).to(device)
 
     elif traj_type == 'gp2': # 기존에 실험했던 correlated noise의 범위와 다르게 실험 (2번 실험)
         traj_np = np.zeros((n_traj,L))
@@ -97,12 +134,13 @@ def get_1d_training_data(
             hyp_len_np
         ).to(th.float32).to(device)
 
-    elif traj_type == 'gp4': # zero padding 실험 (4번 실험)
+    elif traj_type == 'gp4': # 10%, 20%, 30% 패딩
         traj_np = np.zeros((n_traj,L))
         hyp_len_np = np.zeros((n_traj,1))
         hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
         for i_idx in range(n_traj):
             rand_idx = np.random.randint(0,7)
+            real_param.append(hyp_len_candidate[rand_idx])
             traj_np[i_idx,:] = gp_sampler(
                 times    = times,
                 hyp_gain = 2.0,
@@ -119,7 +157,8 @@ def get_1d_training_data(
         np.random.shuffle(zero_padding_idx)
         group = np.array_split(zero_padding_idx, 3)
         true_length = th.Tensor([128] * traj.shape[0])
-        
+        real_param = th.Tensor(real_param)
+
         for i in range(1, len(group)+1):
             rate = 0.1 * i # 퍼센트 지정
             front = traj[group[i-1], :-int(traj.shape[1]*rate)] 
@@ -131,13 +170,15 @@ def get_1d_training_data(
             hyp_len_np
         ).to(th.float32).to(device)
         true_length = true_length.to(th.float32).to(device)
+        real_param = real_param.to(th.float32).to(device)
 
-    elif traj_type == 'gp5': # zero padding 실험 (4번 실험)
+    elif traj_type == 'gp5': # true length 없는 거
         traj_np = np.zeros((n_traj,L))
         hyp_len_np = np.zeros((n_traj,1))
         hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
         for i_idx in range(n_traj):
             rand_idx = np.random.randint(0,7)
+            real_param.append(hyp_len_candidate[rand_idx])
             traj_np[i_idx,:] = gp_sampler(
                 times    = times,
                 hyp_gain = 2.0,
@@ -153,6 +194,7 @@ def get_1d_training_data(
         zero_padding_idx = np.random.randint(0, traj.shape[0], int(traj.shape[0]*0.3))
         np.random.shuffle(zero_padding_idx)
         group = np.array_split(zero_padding_idx, 3)
+        real_param = th.Tensor(real_param)
         
         for i in range(1, len(group)+1):
             rate = 0.1 * i
@@ -160,11 +202,324 @@ def get_1d_training_data(
             front = traj[group[i-1], :-int(traj.shape[1]*rate)]
             back = th.from_numpy(np.zeros((1, int(traj.shape[1]*rate))).repeat(100).reshape(100,-1)).to(th.float32).to(device)
             traj[group[i-1],:] = th.concat([front, back], dim=1)
+            true_length[group[i-1]] = front.shape[1]
             
         hyp_lens = th.from_numpy(
             hyp_len_np
         ).to(th.float32).to(device)
+        real_param = real_param.to(th.float32).to(device)
+
+    elif traj_type == 'gp6': # 30프로 전부 30프로 제로패딩
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            real_param.append(hyp_len_candidate[rand_idx])
+            traj_np[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] = hyp_len_candidate[rand_idx]
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+
+        zero_padding_idx = np.random.randint(0, traj.shape[0], int(traj.shape[0]*0.3))
+        np.random.shuffle(zero_padding_idx)
+        real_param = th.Tensor(real_param)
+        true_length = th.Tensor([128] * traj.shape[0])
         
+        rate = 0.1 * 3
+        front = traj[zero_padding_idx, :-int(traj.shape[1]*rate)]
+        back = th.from_numpy(np.zeros((1, int(traj.shape[1]*rate))).repeat(300).reshape(300,-1)).to(th.float32).to(device)
+        traj[zero_padding_idx,:] = th.concat([front, back], dim=1)
+        true_length[zero_padding_idx] = front.shape[1]
+
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+        real_param = real_param.to(th.float32).to(device)
+        true_length = true_length.to(th.float32).to(device)
+
+    elif traj_type == 'gp7':
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            real_param.append(hyp_len_candidate[rand_idx])
+            traj_np[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] =  hyp_len_candidate[rand_idx]
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+
+        true_length = th.Tensor([128] * traj.shape[0])
+        true_length = true_length.to(th.float32).to(device)
+
+        real_param = th.Tensor(real_param)
+        real_param = real_param.to(th.float32).to(device)
+
+    elif traj_type == 'step':
+        traj_np = np.zeros((n_traj,L))
+        for i_idx in range(n_traj):
+            period      = np.random.uniform(low=0.38,high=0.42)
+            time_offset = np.random.uniform(low=-0.02,high=0.02)
+            y_min       = np.random.uniform(low=-3.2,high=-2.8)
+            y_max       = np.random.uniform(low=2.8,high=3.2)
+            traj_np[i_idx,:] = periodic_step(
+                times       = times,
+                period      = period,
+                time_offset = time_offset,
+                y_min       = y_min,
+                y_max       = y_max
+            ).reshape(-1)
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+    elif traj_type == 'step2':
+        traj_np = np.zeros((n_traj,L))
+        for i_idx in range(n_traj): # for each trajectory
+            # First, sample value and duration
+            rate = 5
+            val = np.random.uniform(low=-3.0,high=3.0)
+            dur_tick = int(L*np.random.exponential(scale=1/rate))
+            dim_dur  = 0.1 # minimum duration in sec
+            dur_tick = max(dur_tick,int(dim_dur*L))
+            
+            tick_fr = 0
+            tick_to = tick_fr+dur_tick
+            while True:
+                # Append
+                traj_np[i_idx,tick_fr:min(L,tick_to)] = val
+                
+                # Termination condition
+                if tick_to >= L: break 
+                
+                # sample value and duration
+                val = np.random.uniform(low=-3.0,high=3.0)
+                dur_tick = int(L*np.random.exponential(scale=1/rate))
+                dur_tick = max(dur_tick,int(dim_dur*L))
+                
+                # Update tick
+                tick_fr = tick_to
+                tick_to = tick_fr+dur_tick
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+    elif traj_type == 'triangle':
+        traj_np = np.zeros((n_traj,L))
+        for i_idx in range(n_traj):
+            period      = 0.2
+            time_offset = np.random.uniform(low=-0.02,high=0.02)
+            y_min       = np.random.uniform(low=-3.2,high=-2.8)
+            y_max       = np.random.uniform(low=2.8,high=3.2)
+            times_mod = np.mod(times+time_offset,period)/period
+            y = (y_max - y_min) * times_mod + y_min
+            traj_np[i_idx,:] = y.reshape(-1)
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+    else:
+        print ("Unknown traj_type:[%s]"%(traj_type))
+    # # Plot
+    # if plot_data:
+    #     plt.figure(figsize=figsize)
+    #     for i_idx in range(n_traj): 
+    #         plt.plot(times,traj[i_idx,:].cpu().numpy(),ls=ls,color=lc,lw=lw)
+    #     plt.xlim([0.0,1.0])
+    #     plt.ylim([-4,+4])
+    #     plt.xlabel('Time',fontsize=10)
+    #     plt.title('Trajectory type:[%s]'%(traj_type),fontsize=10)
+    #     plt.show()
+    #     plt.savefig(os.path.join(output, 'origin_traj.png'))
+    # Print
+    x_0 = traj[:,None,:] # [N x C x L]
+    if verbose:
+        print ("x_0:[%s]"%(get_torch_size_string(x_0)))
+    # Out
+    return times,x_0, hyp_lens, true_length, real_param
+
+
+def get_2d_training_data(
+    traj_type = 'step', # {'step','gp'}
+    n_traj    = 10,
+    L         = 100,
+    device    = 'cpu',
+    seed      = 1,
+    plot_data = True,
+    figsize   = (6,2),
+    ls        = '-',
+    lc        = 'k',
+    lw        = 1,
+    verbose   = True,
+    output    = './',
+    len_param = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+    ):
+    """ 
+        2-D training data
+    """
+    real_param = []
+    real_param_down = []
+    true_length = None
+    hyp_lens = None
+    if seed is not None:
+        np.random.seed(seed=seed)
+    times = np.linspace(start=0.0,stop=1.0,num=L).reshape((-1,1)) # [L x 1]
+    
+    if traj_type == 'gp1':
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            real_param.append(hyp_len_candidate[rand_idx])
+            traj_np[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] =  hyp_len_candidate[rand_idx]
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device) # [n_traj x L]
+        
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+        real_param = th.Tensor(real_param)
+        real_param = real_param.to(th.float32).to(device)
+                
+        traj = traj[:,None,:]
+        traj = th.cat([traj]*2, dim=1)
+        hyp_lens = th.cat([hyp_lens]*2, dim=1)
+        real_param = real_param[:,None]
+        real_param = th.cat([real_param]*2, dim=1)
+        
+    elif traj_type == 'gp2':
+        hyp_len_candidate = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+        # 손목
+        traj_np = np.zeros((n_traj,L))
+        hyp_len_np = np.zeros((n_traj,1))
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            real_param.append(hyp_len_candidate[rand_idx])
+            traj_np[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np[i_idx] =  hyp_len_candidate[rand_idx]
+        traj = th.from_numpy(
+            traj_np
+        ).to(th.float32).to(device)[:, None, :] # [n_traj x L]        
+        hyp_lens = th.from_numpy(
+            hyp_len_np
+        ).to(th.float32).to(device)
+        real_param = th.Tensor(real_param)
+        real_param = real_param.to(th.float32).to(device)[:, None]
+    
+        # 발목
+        traj_np_down = np.zeros((n_traj,L))
+        hyp_len_np_down = np.zeros((n_traj,1))
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            real_param_down.append(hyp_len_candidate[rand_idx])
+            traj_np_down[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np_down[i_idx] =  hyp_len_candidate[rand_idx]
+        traj_down = th.from_numpy(
+            traj_np_down
+        ).to(th.float32).to(device)[:, None, :] # [n_traj x L]        
+        hyp_lens_down = th.from_numpy(
+            hyp_len_np_down
+        ).to(th.float32).to(device)
+        real_param_down = th.Tensor(real_param_down)
+        real_param_down = real_param_down.to(th.float32).to(device)[:, None]
+        
+        traj = th.cat([traj, traj_down], dim=1)
+        hyp_lens = th.cat([hyp_lens, hyp_lens_down], dim=1)
+        real_param = th.cat([real_param, real_param_down], dim=1)
+        
+    elif traj_type == 'gp3':
+        real_param_up = []
+        real_param_down = []
+        hyp_len_candidate_up = [0.001, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+        hyp_len_candidate_down = [0.001, 0.01, 0.06, 0.1, 0.2]
+        
+        # 손목
+        traj_np_up = np.zeros((n_traj,L))
+        hyp_len_np_up = np.zeros((n_traj,1))
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,7)
+            real_param_up.append(hyp_len_candidate_up[rand_idx])
+            traj_np_up[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate_up[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np_up[i_idx] =  hyp_len_candidate_up[rand_idx]
+        traj_up = th.from_numpy(
+            traj_np_up
+        ).to(th.float32).to(device)[:, None, :] # [n_traj x L]        
+        hyp_lens_up = th.from_numpy(
+            hyp_len_np_up
+        ).to(th.float32).to(device)
+        real_param_up = th.Tensor(real_param_up)
+        real_param_up = real_param_up.to(th.float32).to(device)[:, None]
+    
+        # 발목
+        traj_np_down = np.zeros((n_traj,L))
+        hyp_len_np_down = np.zeros((n_traj,1))
+        for i_idx in range(n_traj):
+            rand_idx = np.random.randint(0,5)
+            real_param_down.append(hyp_len_candidate_down[rand_idx])
+            traj_np_down[i_idx,:] = gp_sampler(
+                times    = times,
+                hyp_gain = 2.0,
+                hyp_len  = hyp_len_candidate_down[rand_idx],
+                meas_std = 1e-8,
+                n_traj   = 1
+            ).reshape(-1)
+            hyp_len_np_down[i_idx] =  hyp_len_candidate_down[rand_idx]
+        traj_down = th.from_numpy(
+            traj_np_down
+        ).to(th.float32).to(device)[:, None, :] # [n_traj x L]        
+        hyp_lens_down = th.from_numpy(
+            hyp_len_np_down
+        ).to(th.float32).to(device)
+        real_param_down = th.Tensor(real_param_down)
+        real_param_down = real_param_down.to(th.float32).to(device)[:, None]
+        
+        traj = th.cat([traj_up, traj_down], dim=1)
+        hyp_lens = th.cat([hyp_lens_up, hyp_lens_down], dim=1)
+        real_param = th.cat([real_param_up, real_param_down], dim=1)
+    
     elif traj_type == 'step':
         traj_np = np.zeros((n_traj,L))
         for i_idx in range(n_traj):
@@ -228,19 +583,20 @@ def get_1d_training_data(
     else:
         print ("Unknown traj_type:[%s]"%(traj_type))
     # Plot
-    if plot_data:
-        plt.figure(figsize=figsize)
-        for i_idx in range(n_traj): 
-            plt.plot(times,traj[i_idx,:].cpu().numpy(),ls=ls,color=lc,lw=lw)
-        plt.xlim([0.0,1.0])
-        plt.ylim([-4,+4])
-        plt.xlabel('Time',fontsize=10)
-        plt.title('Trajectory type:[%s]'%(traj_type),fontsize=10)
-        plt.show()
-        plt.savefig(os.path.join(output, 'origin_traj.png'))
-    # Print
-    x_0 = traj[:,None,:] # [N x C x L]
+    # if plot_data:
+    #     plt.figure(figsize=figsize)
+    #     for i_idx in range(n_traj): 
+    #         plt.plot(times,traj[i_idx,:].cpu().numpy(),ls=ls,color=lc,lw=lw)
+    #     plt.xlim([0.0,1.0])
+    #     plt.ylim([-4,+4])
+    #     plt.xlabel('Time',fontsize=10)
+    #     plt.title('Trajectory type:[%s]'%(traj_type),fontsize=10)
+    #     plt.show()
+    #     plt.savefig(os.path.join(output, 'origin_traj.png'))
+    # # Print
+    # x_0 = traj[:,None,:] # [N x C x L]
+    x_0 = traj
     if verbose:
         print ("x_0:[%s]"%(get_torch_size_string(x_0)))
     # Out
-    return times,x_0, hyp_lens, true_length
+    return times,x_0, hyp_lens, true_length, real_param
