@@ -193,19 +193,46 @@ def forward_sample(x0_batch,t_batch,dc,M=None):
         B = x0_batch.shape[0]
         C = x0_batch.shape[1]
         L = x0_batch.shape[2]
+        M_exp = 0
+        
         if isinstance(M, list): # if M is a list,
             M_use = random.choice(M)
+            if len(M_use.shape) == 3:
+                M_exp = M_use[None] # [D x L x L] => [1 x D x L x L]
+            else:
+                M_exp = M_use[None,None,:,:].expand(B,C,L,L) # [L x L] => [B x C x L x L]                
         else:
             M_use = M # [L x L]
-        M_exp = M_use[None,None,:,:].expand(B,C,L,L) # [L x L] => [B x C x L x L]
+            M_exp = M_use[None,None,:,:].expand(B,C,L,L) # [L x L] => [B x C x L x L]                
+            
         noise_exp = noise[:,:,:,None] # [B x C x L x 1]
         noise_exp = M_exp @ noise_exp # [B x C x L x 1]
         noise = noise_exp.squeeze(dim=3) # [B x C x L]
+
     # Jump diffusion
     xt_batch = sqrt_alphas_bar_t*x0_batch + \
         sqrt_one_minus_alphas_bar*noise # [B x C x ...]
-    return xt_batch,noise
+    return xt_batch, noise
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = th.zeros(max_len, d_model)
+        position = th.arange(0, max_len, dtype=th.float).unsqueeze(1)
+        div_term = th.exp(th.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = th.sin(position * div_term)
+        pe[:, 1::2] = th.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        # not used in the final model
+        x = x + self.pe[:x.shape[0], :]
+        return self.dropout(x)
+    
 class DiffusionUNet(nn.Module):
     """ 
     U-Net for diffusion models
@@ -214,7 +241,7 @@ class DiffusionUNet(nn.Module):
         self,
         name                 = 'unet',
         dims                 = 1, # spatial dimension, if dims==1, [B x C x L], if dims==2, [B x C x W x H]
-        n_in_channels        = 128, # input channels
+        n_in_channels        = 128, # input channels≠
         n_model_channels     = 64, # base channel size
         n_emb_dim            = 128, # time embedding size
         n_cond_dim           = 0, # conditioning vector size (default is 0 indicating an unconditional model)
@@ -490,12 +517,18 @@ class DiffusionUNetLegacy(nn.Module):
         
         # Conditional embedding
         if self.n_cond_dim > 0:
-            self.cond_embed = nn.Sequential(
+            self.cond_embed_1 = nn.Sequential(
                 nn.Linear(in_features=self.n_cond_dim,out_features=self.n_emb_dim),
                 nn.SiLU(),
                 nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
             ).to(self.device)
-        
+            
+            self.cond_embed_2 = nn.Sequential(
+                nn.Linear(in_features=self.n_cond_dim,out_features=self.n_emb_dim),
+                nn.SiLU(),
+                nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+            ).to(self.device)
+            
         # Lifting (1x1 conv)
         self.lift = conv_nd(
             dims         = self.dims,
@@ -623,6 +656,261 @@ class DiffusionUNetLegacy(nn.Module):
         """
         intermediate_output_dict = {}
         intermediate_output_dict['x'] = x
+        
+        # time embedding
+        emb = self.time_embed(
+            timestep_embedding(timesteps,self.n_base_channels)
+        ) # [B x n_emb_dim]
+        
+        # conditional embedding
+        if self.n_cond_dim > 0:
+            c_1 = c[:, 0].unsqueeze(1)
+            c_2 = c[:, 1].unsqueeze(1)
+            cond_1 = self.cond_embed_1(c_1)
+            cond_2 = self.cond_embed_2(c_2)
+            emb = emb + cond_1 + cond_2
+        
+        # Lift input
+        h = self.lift(x) # [B x n_base_channels x ...]
+        if isinstance(h,tuple): h = h[0] # in case of having tuple
+        intermediate_output_dict['x_lifted'] = h
+        
+        # Encoder
+        self.h_enc_list = [h] # start with lifted input
+        for m_idx,module in enumerate(self.enc_net):
+            h = module(h,emb)
+            if isinstance(h,tuple): h = h[0] # in case of having tuple
+            # Append
+            module_name = module[0].name
+            intermediate_output_dict['h_enc_%s_%02d'%(module_name,m_idx)] = h
+            # Append encoder output
+            if self.use_attention:
+                if (m_idx%2) == 1:
+                    self.h_enc_list.append(h)
+            else:
+                self.h_enc_list.append(h)
+            
+        # Mid
+        h = self.mid(h)
+        if isinstance(h,tuple): h = h[0] # in case of having tuple
+        
+        # Decoder
+        for m_idx,module in enumerate(self.dec_net):
+            if self.use_attention:
+                if (m_idx%2) == 0:
+                    h = th.cat((h,self.h_enc_list.pop()),dim=1)
+            else:
+
+                h = th.cat((h,self.h_enc_list.pop()),dim=1)
+            h = module(h,emb)  # [B x n_base_channels x ...]
+            if isinstance(h,tuple): h = h[0] # in cfase of having tuple
+            # Append
+            module_name = module[0].name
+            intermediate_output_dict['h_dec_%s_%02d'%(module_name,m_idx)] = h
+                
+        # Projection
+        h = th.cat((h,self.h_enc_list.pop()),dim=1)
+        
+        if self.skip_connection:
+            out = self.proj(h) + x # [B x n_in_channels x ...]
+        else:
+            out = self.proj(h) # [B x n_in_channels x ...]
+            
+        # Append
+        intermediate_output_dict['out'] = out # [B x n_in_channels x ...]
+        
+        return out,intermediate_output_dict
+
+class DiffusionUNetLegacy_origin(nn.Module):
+    """ 
+    U-Net for diffusion models (legacy)
+    """
+    def __init__(
+        self,
+        name                 = 'unet',
+        dims                 = 1, # spatial dimension, if dims==1, [B x C x L], if dims==2, [B x C x W x H]
+        n_in_channels        = 128, # input channels
+        n_base_channels      = 64, # base channel size
+        n_emb_dim            = 128, # time embedding size
+        n_cond_dim           = 0, # conditioning vector size (default is 0 indicating an unconditional model)
+        n_enc_blocks         = 3, # number of encoder blocks
+        n_dec_blocks         = 3, # number of decoder blocks
+        n_groups             = 16, # group norm paramter
+        n_heads              = 4, # number of heads
+        actv                 = nn.SiLU(),
+        kernel_size          = 3, # kernel size
+        padding              = 1,
+        use_attention        = True,
+        skip_connection      = True, # (optional) additional final skip connection
+        use_scale_shift_norm = True, # positional embedding handling
+        chnnel_multiples     = (1,2,4),
+        updown_rates         = (2,2,2),
+        device               = 'cpu',
+    ):
+        super().__init__()
+        self.name                 = name
+        self.dims                 = dims
+        self.n_in_channels        = n_in_channels
+        self.n_base_channels      = n_base_channels
+        self.n_emb_dim            = n_emb_dim
+        self.n_cond_dim           = n_cond_dim
+        self.n_enc_blocks         = n_enc_blocks
+        self.n_dec_blocks         = n_dec_blocks
+        self.n_groups             = n_groups
+        self.n_heads              = n_heads
+        self.actv                 = actv
+        self.kernel_size          = kernel_size
+        self.padding              = padding
+        self.use_attention        = use_attention
+        self.skip_connection      = skip_connection
+        self.use_scale_shift_norm = use_scale_shift_norm
+        self.chnnel_multiples     = chnnel_multiples
+        self.updown_rates         = updown_rates
+        self.device               = device
+        
+        # Time embedding
+        self.time_embed = nn.Sequential(
+            nn.Linear(in_features=self.n_base_channels,out_features=self.n_emb_dim),
+            nn.SiLU(),
+            nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+        ).to(self.device)
+        
+        # Conditional embedding
+        if self.n_cond_dim > 0:
+            self.cond_embed = nn.Sequential(
+                nn.Linear(in_features=self.n_cond_dim,out_features=self.n_emb_dim),
+                nn.SiLU(),
+                nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+            ).to(self.device)
+            
+        # Lifting (1x1 conv)
+        self.lift = conv_nd(
+            dims         = self.dims,
+            in_channels  = self.n_in_channels,
+            out_channels = self.n_base_channels,
+            kernel_size  = 1,
+        ).to(device)
+        
+        # Encoder
+        self.enc_layers = []
+        n_channels2cat = [] # channel size to concat for decoder (note that we should use .pop() )
+        for e_idx in range(self.n_enc_blocks): # for each encoder block
+            if e_idx == 0:
+                in_channel  = self.n_base_channels
+                out_channel = self.n_base_channels*self.chnnel_multiples[e_idx]
+            else:
+                in_channel  = self.n_base_channels*self.chnnel_multiples[e_idx-1]
+                out_channel = self.n_base_channels*self.chnnel_multiples[e_idx]
+            n_channels2cat.append(out_channel) # append out_channel
+            updown_rate = updown_rates[e_idx]
+            
+            # Residual block in encoder
+            self.enc_layers.append(
+                ResBlock(
+                    name                 = 'res',
+                    n_channels           = in_channel,
+                    n_emb_channels       = self.n_emb_dim,
+                    n_out_channels       = out_channel,
+                    n_groups             = self.n_groups,
+                    dims                 = self.dims,
+                    actv                 = self.actv,
+                    kernel_size          = self.kernel_size,
+                    padding              = self.padding,
+                    downsample           = updown_rate != 1,
+                    down_rate            = updown_rate,
+                    use_scale_shift_norm = self.use_scale_shift_norm,
+                ).to(device)
+            )
+            # Attention block in encoder
+            if self.use_attention:
+                self.enc_layers.append(
+                    AttentionBlock(
+                        name           = 'att',
+                        n_channels     = out_channel,
+                        n_heads        = self.n_heads,
+                        n_groups       = self.n_groups,
+                    ).to(device)
+                )
+        
+        # Mid
+        self.mid = conv_nd(
+            dims         = self.dims,
+            in_channels  = self.n_base_channels*self.chnnel_multiples[-1],
+            out_channels = self.n_base_channels*self.chnnel_multiples[-1],
+            kernel_size  = 1,
+        ).to(device)
+            
+        # Decoder
+        self.dec_layers = []
+        for d_idx in range(self.n_dec_blocks):
+            # Residual block in decoder
+            if d_idx == 0: # first decoder
+                in_channel = self.chnnel_multiples[::-1][d_idx]*self.n_base_channels + n_channels2cat.pop()
+                out_channel = self.chnnel_multiples[::-1][d_idx]*self.n_base_channels
+            else: 
+                in_channel = self.chnnel_multiples[::-1][d_idx-1]*self.n_base_channels + n_channels2cat.pop()
+                out_channel = self.chnnel_multiples[::-1][d_idx]*self.n_base_channels
+                
+            updown_rate = updown_rates[::-1][d_idx]
+                
+            self.dec_layers.append(
+                ResBlock(
+                    name                 = 'res',
+                    n_channels           = in_channel,
+                    n_emb_channels       = self.n_emb_dim,
+                    n_out_channels       = out_channel,
+                    n_groups             = self.n_groups,
+                    dims                 = self.dims,
+                    actv                 = self.actv,
+                    kernel_size          = self.kernel_size,
+                    padding              = self.padding,
+                    upsample             = updown_rate != 1,
+                    up_rate              = updown_rate,
+                    use_scale_shift_norm = self.use_scale_shift_norm,
+                ).to(device)
+            )
+            # Attention block in decoder
+            if self.use_attention:
+                self.dec_layers.append(
+                    AttentionBlock(
+                        name           = 'att',
+                        n_channels     = out_channel,
+                        n_heads        = self.n_heads,
+                        n_groups       = self.n_groups,
+                    ).to(device)
+                )
+            
+        # Projection
+        self.proj = conv_nd(
+            dims         = self.dims,
+            in_channels  = (1+self.chnnel_multiples[0])*self.n_base_channels,
+            out_channels = self.n_in_channels,
+            kernel_size  = 1,
+        ).to(device)
+
+        # Define U-net
+        self.enc_net = nn.Sequential()
+        for l_idx,layer in enumerate(self.enc_layers):
+            self.enc_net.add_module(
+                name   = 'enc_%02d'%(l_idx),
+                module = TimestepEmbedSequential(layer)
+            )
+        self.dec_net = nn.Sequential()
+        for l_idx,layer in enumerate(self.dec_layers):
+            self.dec_net.add_module(
+                name   = 'dec_%02d'%(l_idx),
+                module = TimestepEmbedSequential(layer)
+            )
+        
+    def forward(self,x,timesteps,c=None):
+        """ 
+        :param x: [B x n_in_channels x ...]
+        :timesteps: [B]
+        :return: [B x n_in_channels x ...], same shape as x
+        """
+        intermediate_output_dict = {}
+        intermediate_output_dict['x'] = x
+        
         # time embedding
         emb = self.time_embed(
             timestep_embedding(timesteps,self.n_base_channels)
@@ -683,8 +971,7 @@ class DiffusionUNetLegacy(nn.Module):
         intermediate_output_dict['out'] = out # [B x n_in_channels x ...]
         
         return out,intermediate_output_dict
-
-
+    
 class DiffusionUNetLegacy_leng(nn.Module):
     """ 
     U-Net for diffusion models (legacy)
@@ -868,6 +1155,7 @@ class DiffusionUNetLegacy_leng(nn.Module):
                 name   = 'enc_%02d'%(l_idx),
                 module = TimestepEmbedSequential(layer)
             )
+            
         self.dec_net = nn.Sequential()
         for l_idx,layer in enumerate(self.dec_layers):
             self.dec_net.add_module(
@@ -881,6 +1169,7 @@ class DiffusionUNetLegacy_leng(nn.Module):
         :timesteps: [B]
         :return: [B x n_in_channels x ...], same shape as x
         """
+
         intermediate_output_dict = {}
         intermediate_output_dict['x'] = x
         # time embedding
@@ -947,12 +1236,6 @@ class DiffusionUNetLegacy_leng(nn.Module):
         intermediate_output_dict['out'] = out # [B x n_in_channels x ...]
         
         return out,intermediate_output_dict
-
-
-
-
-
-
 
 class DiffusionUNetCond(nn.Module):
     """ 
@@ -1499,25 +1782,164 @@ class DiffusionUNetBCond(nn.Module):
         return out,intermediate_output_dict
 
 
+class TransformerEncoder(nn.Module):
+    def __init__(self, n_base_channels=128, n_emb_dim=128, n_in_dim=1, n_cond_dim=1, device=None,
+                 num_heads=4, ff_size=1024, dropout=0.1, num_layers=8, activation='gelu'):
+        super().__init__()
+        
+        self.n_base_channels = n_base_channels
+        self.n_emb_dim = n_emb_dim
+        self.n_in_dim = n_in_dim
+        self.n_cond_dim = n_cond_dim
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.ff_size = ff_size
+        self.dropout = dropout
+        self.activation = activation
+        self.device = device
+        
+        # transformer
+        seqTransEncoderLayer = nn.TransformerEncoderLayer(d_model=self.n_emb_dim,
+                                                        nhead=self.num_heads,
+                                                        dim_feedforward=self.ff_size,
+                                                        dropout=self.dropout,
+                                                        activation=self.activation).to(self.device)
+        
+        self.seqTransEncoder = nn.TransformerEncoder(seqTransEncoderLayer,
+                                                         num_layers=self.num_layers).to(self.device)
 
+        # Positioinal encoding
+        self.sequence_pos_encoder = PositionalEncoding(self.n_emb_dim, self.dropout).to(self.device)
+        
+        # input embedding
+        self.in_embed = nn.Linear(in_features=self.n_in_dim, out_features=self.n_emb_dim).to(self.device)
+        
+        # Time embedding
+        self.time_embed = nn.Sequential(
+            nn.Linear(in_features=self.n_base_channels,out_features=self.n_emb_dim),
+            nn.SiLU(),
+            nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+        ).to(self.device)
+        
+        # Conditional embedding
+        if self.n_cond_dim > 0:
+            self.cond_embed = nn.Sequential(
+                nn.Linear(in_features=self.n_cond_dim,out_features=self.n_emb_dim),
+                nn.SiLU(),
+                nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+            ).to(self.device)
 
+        self.out_embed = nn.Linear(in_features=self.n_emb_dim, out_features=self.n_in_dim).to(self.device)
+        
+    def forward(self, x, timesteps, cond=None):
+        x = x.permute(2,0,1) # (bs, d, len) -> (len, bs, d)
+        x = self.in_embed(x) # (len, bs, d) -> (128, 128, 128)
+        
+        emb = self.time_embed(
+            timestep_embedding(timesteps,self.n_base_channels)
+        ) # (bs, d)
+        
+        if self.n_cond_dim > 0:
+            cond = self.cond_embed(cond)
+            emb = emb + cond # (bs, d)
+        emb = emb.unsqueeze(0) # (1, bs, d)    
+        
+        xseq = th.cat((emb, x), axis=0) # (len+1, bs, d)
+        xseq = self.sequence_pos_encoder(xseq) # (len+1, bs, d)
+        
+        output = self.seqTransEncoder(xseq)[1:] # (len, bs, d)
+        output = self.out_embed(output) #  (len, bs, d)
+        output = output.permute(1,2,0) # (bs, d, len)
+        
+        temp = 0 
+        return output, temp
 
+class TransformerEncoder_leng(nn.Module):
+    def __init__(self, n_base_channels=128, n_emb_dim=128, n_in_dim=1, n_cond_dim=1, n_leng_cond_dim=1, device=None,
+                 num_heads=4, ff_size=1024, dropout=0.1, num_layers=8, activation='gelu'):
+        super().__init__()
+        
+        self.n_base_channels = n_base_channels
+        self.n_emb_dim = n_emb_dim
+        self.n_in_dim = n_in_dim
+        self.n_cond_dim = n_cond_dim
+        self.n_leng_cond_dim = n_leng_cond_dim
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.ff_size = ff_size
+        self.dropout = dropout
+        self.activation = activation
+        self.device = device
+        
+        # transformer
+        seqTransEncoderLayer = nn.TransformerEncoderLayer(d_model=self.n_emb_dim,
+                                                        nhead=self.num_heads,
+                                                        dim_feedforward=self.ff_size,
+                                                        dropout=self.dropout,
+                                                        activation=self.activation).to(self.device)
+        
+        self.seqTransEncoder = nn.TransformerEncoder(seqTransEncoderLayer,
+                                                         num_layers=self.num_layers).to(self.device)
 
+        # Positioinal encoding
+        self.sequence_pos_encoder = PositionalEncoding(self.n_emb_dim, self.dropout).to(self.device)
+        
+        # input embedding
+        self.in_embed = nn.Linear(in_features=self.n_in_dim, out_features=self.n_emb_dim).to(self.device)
+        
+        # Time embedding
+        self.time_embed = nn.Sequential(
+            nn.Linear(in_features=self.n_base_channels,out_features=self.n_emb_dim),
+            nn.SiLU(),
+            nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+        ).to(self.device)
+        
+        # Conditional embedding
+        if self.n_cond_dim > 0:
+            self.cond_embed = nn.Sequential(
+                nn.Linear(in_features=self.n_cond_dim,out_features=self.n_emb_dim),
+                nn.SiLU(),
+                nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+            ).to(self.device)
+        
+        if self.n_leng_cond_dim  > 0:
+            self.len_cond_embed = nn.Sequential(
+                nn.Linear(in_features=self.n_leng_cond_dim,out_features=self.n_emb_dim),
+                nn.SiLU(),
+                nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+            ).to(self.device)
+            
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        self.out_embed = nn.Linear(in_features=self.n_emb_dim, out_features=self.n_in_dim).to(self.device)
+        
+    def forward(self, x, timesteps, c=None, len_c=None):
+        x = x.permute(2,0,1) # (bs, d, len)
+        x = self.in_embed(x) # (len, bs, d)
+        
+        emb = self.time_embed(
+            timestep_embedding(timesteps,self.n_base_channels)
+        ) # (bs, d)
+        
+        if self.n_cond_dim > 0:
+            cond = self.cond_embed(c)
+            emb = emb + cond # (bs, d)
+            
+        if self.n_leng_cond_dim > 0:
+            l_cond = self.len_cond_embed(len_c.unsqueeze(1))
+            emb = emb + l_cond
+        emb = emb.unsqueeze(0) # (1, bs, d)
+        
+        
+        xseq = th.cat((emb, x), axis=0) # (len+1, bs, d)
+        xseq = self.sequence_pos_encoder(xseq) # (len+1, bs, d)
+        
+        output = self.seqTransEncoder(xseq)[1:] # (len, bs, d)
+        output = self.out_embed(output) #  (len, bs, d)
+        output = output.permute(1,2,0) # (bs, d, len)
+        
+        temp = 0 
+        return output, temp
+    
 def get_param_groups_and_shapes(named_model_params):
     named_model_params = list(named_model_params)
     scalar_vector_named_params = (
@@ -1706,9 +2128,11 @@ class MixedPrecisionTrainer:
 
 def eval_ddpm_1d(
     model,
+    true,
     dc,
     n_sample,
     x_0,
+    true_length,
     step_list_to_append,
     device,
     cond        = None,
@@ -1731,6 +2155,7 @@ def eval_ddpm_1d(
     _,x_T      = forward_sample(x_dummy,step_dummy,dc,M) # [n_sample x C x L]
     x_t        = x_T.clone() # [n_sample x C x L]
     x_t_list   = ['']*dc['T'] # empty list 
+
     for t in range(0,dc['T'])[::-1]: # 999 to 0
         # Score function
         step = th.full(
@@ -1740,7 +2165,15 @@ def eval_ddpm_1d(
             dtype      = th.long) # [n_sample]
         with th.no_grad():
             # if cond is None: # unconditioned model
-            eps_t,_ = model(x_t,step, hyp_len) # [n_sample x C x L]
+            if true:
+                eps_t,_ = model(x_t,step,hyp_len, true_length)    
+        
+            else:
+                if cond:
+                    eps_t,_ = model(x_t, step, hyp_len)
+                else:
+                    eps_t,_ = model(x_t, step) # [B x C x L]
+            # [n_sample x C x L]
             # else:
             #     cond_weight = 0.5
             #     eps_cont_d,_ = model(x_t,step,cond.repeat(n_sample,1))
