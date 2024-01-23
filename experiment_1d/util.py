@@ -195,6 +195,12 @@ def kernel_se(x1,x2,hyp={'gain':1.0,'len':1.0}):
     K = hyp['gain']*np.exp(-D)
     return K
 
+def kernel_se_2d(x1,x2,hyp={'gain':1.0,'len1':1.0, 'len1':0.2}):
+    """ Squared-exponential kernel function """
+    D = distance.cdist(x1/hyp['len1'],x2/hyp['len2'],'sqeuclidean')
+    K = hyp['gain']*np.exp(-D)
+    return K
+
 def gp_sampler(
     times    = np.linspace(start=0.0,stop=1.0,num=100).reshape((-1,1)), # [L x 1]
     hyp_gain = 1.0,
@@ -244,7 +250,7 @@ def periodic_step(times,period,time_offset=0.0,y_min=0.0,y_max=1.0):
     return y
 
 def plot_ddpm_1d_result(
-    times,x_data,step_list,x_t_list,
+    times,x_data, real_param, step_list,x_t_list,
     plot_ancestral_sampling=True,
     plot_one_sample=False,
     lw_gt=1,lw_sample=1/2,
@@ -259,7 +265,11 @@ def plot_ddpm_1d_result(
     :param step_list: [M] ndarray, diffusion steps to append x_t
     :param x_t_list: list of [n_sample x C x L] torch tensors
     """
-    
+    # Select the data that matched to the len parameter
+    target_value = len_param
+    indices = th.nonzero(real_param == target_value).squeeze()
+    x_data = x_data[indices, :, :][:30,:,:]
+
     x_data_np = x_data.detach().cpu().numpy() # [n_data x C x L]
     n_data = x_data_np.shape[0] # number of GT data
     
@@ -280,7 +290,7 @@ def plot_ddpm_1d_result(
         plt.tight_layout(); plt.show()
     
     # Plot generated data
-    plt.figure(figsize=figsize)
+    plt.figure(figsize=figsize) 
     x_0_np = x_t_list[0].detach().cpu().numpy() # [n_sample x C x L]
     for i_idx in range(n_data): # GT
         plt.plot(times.flatten(),x_data_np[i_idx,0,:],ls=ls_gt,color=lc_gt,lw=lw_gt)
@@ -301,8 +311,106 @@ def plot_ddpm_1d_result(
     plt.show()
     plt.savefig(os.path.join(output, f'generated_{len_param}.png'))
 
+def plot_ddpm_2d_data_result(
+    times,x_data, real_param, step_list,x_t_list,
+    plot_ancestral_sampling=True,
+    plot_one_sample=False,
+    lw_gt=1,lw_sample=1/2,
+    ls_gt='-',ls_sample='-',
+    lc_gt='b',lc_sample='k',
+    ylim=(-4,+4),figsize=(6,3),title_str=None,
+    output='./', len_param=0.1
+    ):  
+    
+    # Select the data that matched to the len parameter
+    # Plot generated data
+    fig, ax = plt.subplots(figsize=figsize)
+    origin_x_data = x_data
+    
+    for i in range(1, 3):
+        target_value = len_param[i-1]
+        indices = th.nonzero(real_param[:, i-1] == target_value).squeeze()
+        x_data = origin_x_data[indices, i-1, :].unsqueeze(1)
+        x_data = x_data[:30,:,:]
 
+        x_data_np = x_data.detach().cpu().numpy() # [n_data x C x L]
+        n_data = x_data_np.shape[0] # number of GT data
+    
+        plt.subplot(1, 2, i)
+        
+        x_0_np = x_t_list[0][:, i-1, :][:, None, :].detach().cpu().numpy() # [n_sample x C x L]
+        
+        for i_idx in range(n_data): # GT
+            plt.plot(times.flatten(),x_data_np[i_idx,0,:],ls=ls_gt,color=lc_gt,lw=lw_gt)
+        n_sample = x_0_np.shape[0]
+        if plot_one_sample:
+            i_idx = np.random.randint(low=0,high=n_sample)
+            plt.plot(times.flatten(),x_0_np[i_idx,0,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
+        else:
+            for i_idx in range(n_sample): # sampled trajectories
+                plt.plot(times.flatten(),x_0_np[i_idx,0,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
+        plt.xlim([0.0,1.0]); plt.ylim(ylim)
+        plt.xlabel('Time',fontsize=15)
+        if title_str is None:
+            title = {1:'1st', 2:'2nd'}
+            plt.title(f'Groundtruth and Generated {title[i]} trajectories of {len_param[i-1]}',fontsize=13, pad=10)
+        else:
+            plt.title(title_str,fontsize=20, pad=10)
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(os.path.join(output, f'generated_{len_param[0]}_{len_param[1]}.png'))
 
+    plt.cla()
+    plt.clf()
+    plt.close() 
+    
+def plot_ddpm_2d_gt_result(
+    times,x_data, real_param, step_list,x_t_list,
+    plot_ancestral_sampling=True,
+    plot_one_sample=False,
+    lw_gt=1,lw_sample=1/2,
+    ls_gt='-',ls_sample='-',
+    lc_gt='b',lc_sample='k',
+    ylim=(-4,+4),figsize=(6,3),title_str=None,
+    output='./', len_param=0.1
+    ):  
+    
+    # Select the data that matched to the len parameter
+    # Plot generated data
+    fig, ax = plt.subplots(figsize=figsize)
+    origin_x_data = x_data
+    
+    for i in range(1, 3):
+        target_value = len_param[i-1]
+        indices = th.nonzero(real_param[:, i-1] == target_value).squeeze()
+        x_data = origin_x_data[indices, i-1, :].unsqueeze(1)
+        x_data = x_data[:30,:,:]
+
+        x_data_np = x_data.detach().cpu().numpy() # [n_data x C x L]
+        n_data = x_data_np.shape[0] # number of GT data
+    
+        plt.subplot(1, 2, i)
+        
+        x_0_np = x_t_list[0][:, i-1, :][:, None, :].detach().cpu().numpy() # [n_sample x C x L]
+        for i_idx in range(n_data): # GT
+            plt.plot(times.flatten(),x_data_np[i_idx,0,:],ls=ls_gt,color=lc_gt,lw=lw_gt)
+        n_sample = x_0_np.shape[0]
+        if plot_one_sample:
+            i_idx = np.random.randint(low=0,high=n_sample)
+            plt.plot(times.flatten(),x_0_np[i_idx,0,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
+        else:
+            for i_idx in range(n_sample): # sampled trajectories
+                plt.plot(times.flatten(),x_0_np[i_idx,0,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
+        plt.xlim([0.0,1.0]); plt.ylim(ylim)
+        plt.xlabel('Time',fontsize=15)
+        if title_str is None:
+            plt.title(f'Groundtruth and Generated trajectories of {len_param[i-1]}',fontsize=15, pad=10)
+        else:
+            plt.title(title_str,fontsize=20, pad=10)
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(os.path.join(output, f'generated_{len_param}.png'))
+    
 def plot_ddpm_2d_result(
     x_data,step_list,x_t_list,n_plot=1,
     tfs=10
@@ -340,6 +448,29 @@ def get_hbm_M(times,hyp_gain=1.0,hyp_len=0.1,device='cpu'):
     U,V = np.linalg.eigh(K,UPLO='L')
     M = V @ np.diag(np.sqrt(U))
     M = th.from_numpy(M).to(th.float32).to(device) # [L x L]
+    
+    return M
+
+def get_hbm_M_2d(times,hyp_gain=1.0,hyp_len_1=0.1, hyp_len_2=0.2,device='cpu'):
+    """ 
+    Get a matrix M for Hilbert Brownian motion
+    :param times: [L x 1] ndarray
+    :return: [L x L] torch tensor
+    """
+    
+    L = times.shape[0]
+    K1 = kernel_se(times,times,hyp={'gain':hyp_gain,'len':hyp_len_1})
+    K2 = kernel_se(times,times,hyp={'gain':hyp_gain,'len':hyp_len_2}) # [L x L]
+    K = np.stack([K1, K2]) # [D X L X L]
+
+    O = K + 1e-8*np.eye(L,L)
+    U,V = np.linalg.eigh(O,UPLO='L')
+    M = []
+    for v, u in zip(V, U):    
+        M.append(v @ np.diag(np.sqrt(u)))
+    M = np.stack(M)
+    M = th.from_numpy(M).to(th.float32).to(device) # [D X L X L]
+    
     return M
 
 def get_resampling_steps(t_T, j, r,plot_steps=False,figsize=(15,4)):
