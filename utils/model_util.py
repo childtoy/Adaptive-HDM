@@ -27,20 +27,24 @@ def get_model_args(args, data):
 
     # SMPL defaults
     data_rep = 'rot6d'
-    njoints = 25
+    njoints = 23
     nfeats = 6
 
     if args.dataset == 'humanml':
         data_rep = 'hml_vec'
         njoints = 263
         nfeats = 1
-    if args.dataset == 'humanml2':
+    elif args.dataset == 'humanml2':
         # data_rep = 'hml_vec'
         njoints = 138
         nfeats = 1
     elif args.dataset == 'kit':
         data_rep = 'hml_vec'
         njoints = 251
+        nfeats = 1
+    elif args.dataset == 'LAFAN':
+        data_rep = 'rot6d'
+        njoints = 138
         nfeats = 1
 
     return {'modeltype': '', 'njoints': njoints, 'nfeats': nfeats, 'num_actions': num_actions,
@@ -54,6 +58,7 @@ def get_model_args(args, data):
 def create_gaussian_diffusion(args):
     # default params
     predict_xstart = args.pred_xstart  # we always predict x_start (a.k.a. x0), that's our deal!
+    # predict_xstart = True
     # predict_xstart = False  # we always predict x_start (a.k.a. x0), that's our deal!
     steps = 1000
     scale_beta = 1.  # no scaling

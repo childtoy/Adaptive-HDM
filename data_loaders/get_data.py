@@ -21,6 +21,9 @@ def get_dataset_class(name):
     elif name == "kit":
         from data_loaders.humanml.data.dataset import KIT
         return KIT
+    elif name == "LAFAN":
+        from cmib.data.lafan1_dataset import LAFAN1Dataset
+        return LAFAN1Dataset
     else:
         raise ValueError(f'Unsupported dataset name [{name}]')
 

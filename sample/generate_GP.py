@@ -17,7 +17,7 @@ import data_loaders.humanml.utils.paramUtil as paramUtil
 from data_loaders.humanml.utils.plot_script import plot_3d_motion
 import shutil
 from data_loaders.tensors import collate
-
+import pickle as pkl
 
 def main():
     args = generate_args()
@@ -25,14 +25,18 @@ def main():
     out_path = args.output_dir
     name = os.path.basename(os.path.dirname(args.model_path))
     niter = os.path.basename(args.model_path).replace('model', '').replace('.pt', '')
-    max_frames = 196 if args.dataset in ['kit', 'humanml'] else 60
+    max_frames = 196 if args.dataset in ['kit', 'humanml','humanml2'] else 60
     fps = 12.5 if args.dataset == 'kit' else 20
     n_frames = min(max_frames, int(args.motion_length*fps))
     is_using_data = not any([args.input_text, args.text_prompt, args.action_file, args.action_name])
+    
+    with open(args.param_lenK_path, 'rb') as f : 
+        param_lenK = pkl.load(f)
+
     dist_util.setup_dist(args.device)
     if out_path == '':
         out_path = os.path.join(os.path.dirname(args.model_path),
-                                'samples_{}_{}_seed{}'.format(name, niter, args.seed))
+                                'samples_{}_len{}_{}_seed{}'.format(name, param_lenK['len_param'][args.len_idx], niter, args.seed))
         if args.text_prompt != '':
             out_path += '_' + args.text_prompt.replace(' ', '_').replace('.', '')
         elif args.input_text != '':
@@ -101,6 +105,11 @@ def main():
     all_motions = []
     all_lengths = []
     all_text = []
+    
+    K_params = param_lenK['K_param'][args.len_idx]
+    print('# of len params :', len(K_params))
+    len_param = param_lenK['len_param'][args.len_idx]
+    len_param = torch.Tensor([len_param]).to(dist_util.dev()).repeat(args.batch_size,1).reshape(args.batch_size,1)
 
     for rep_i in range(args.num_repetitions):
         print(f'### Sampling [repetitions #{rep_i}]')
@@ -108,13 +117,14 @@ def main():
         # add CFG scale to batch
         if args.guidance_param != 1:
             model_kwargs['y']['scale'] = torch.ones(args.batch_size, device=dist_util.dev()) * args.guidance_param
-
         sample_fn = diffusion.p_sample_loop
-
+        print(diffusion.model_mean_type)
         sample = sample_fn(
             model,
             # (args.batch_size, model.njoints, model.nfeats, n_frames),  # BUG FIX - this one caused a mismatch between training and inference
             (args.batch_size, model.njoints, model.nfeats, max_frames),  # BUG FIX
+            K_params,
+            len_param,
             clip_denoised=False,
             model_kwargs=model_kwargs,
             skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
@@ -187,13 +197,16 @@ def main():
             save_file = sample_file_template.format(sample_i, rep_i)
             print(sample_print_template.format(caption, sample_i, rep_i, save_file))
             animation_save_path = os.path.join(out_path, save_file)
+            print('motion',motion.shape)
+            # print('skeleton', skeleton.shape)
+            print(skeleton)
             plot_3d_motion(animation_save_path, skeleton, motion, dataset=args.dataset, title=caption, fps=fps)
             # Credit for visualization: https://github.com/EricGuo5513/text-to-motion
-            rep_files.append(animation_save_path)
+        #     rep_files.append(animation_save_path)
 
-        sample_files = save_multiple_samples(args, out_path,
-                                               row_print_template, all_print_template, row_file_template, all_file_template,
-                                               caption, num_samples_in_out_file, rep_files, sample_files, sample_i)
+        # sample_files = save_multiple_samples(args, out_path,
+        #                                        row_print_template, all_print_template, row_file_template, all_file_template,
+        #                                        caption, num_samples_in_out_file, rep_files, sample_files, sample_i)
 
     abs_path = os.path.abspath(out_path)
     print(f'[Done] Results are at [{abs_path}]')
@@ -224,17 +237,17 @@ def save_multiple_samples(args, out_path, row_print_template, all_print_template
 
 
 def construct_template_variables(unconstrained):
-    row_file_template = 'sample{:02d}.mp4'
-    all_file_template = 'samples_{:02d}_to_{:02d}.mp4'
+    row_file_template = 'sample{:02d}.gif'
+    all_file_template = 'samples_{:02d}_to_{:02d}.gif'
     if unconstrained:
-        sample_file_template = 'row{:02d}_col{:02d}.mp4'
+        sample_file_template = 'row{:02d}_col{:02d}.gif'
         sample_print_template = '[{} row #{:02d} column #{:02d} | -> {}]'
         row_file_template = row_file_template.replace('sample', 'row')
         row_print_template = '[{} row #{:02d} | all columns | -> {}]'
         all_file_template = all_file_template.replace('samples', 'rows')
         all_print_template = '[rows {:02d} to {:02d} | -> {}]'
     else:
-        sample_file_template = 'sample{:02d}_rep{:02d}.mp4'
+        sample_file_template = 'sample{:02d}_rep{:02d}.gif'
         sample_print_template = '["{}" ({:02d}) | Rep #{:02d} | -> {}]'
         row_print_template = '[ "{}" ({:02d}) | all repetitions | -> {}]'
         all_print_template = '[samples {:02d} to {:02d} | all repetitions | -> {}]'

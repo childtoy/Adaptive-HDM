@@ -19,6 +19,8 @@ from diffusion.resample import create_named_schedule_sampler
 from data_loaders.humanml.networks.evaluator_wrapper import EvaluatorMDMWrapper
 from eval import eval_humanml, eval_humanact12_uestc
 from data_loaders.get_data import get_dataset_loader
+from data_loaders.humanml.utils.plot_script import plot_3d_motion
+import data_loaders.humanml.utils.paramUtil as paramUtil
 
 import sys
 # For ImageNet experiments, this was a good default value.
@@ -224,9 +226,36 @@ class TrainLoop:
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
             len_idx = random.randint(0, self.num_len-1)
-            K_param = self.param_lenK['K_param'][len_idx]
+            K_param = random.choice(self.param_lenK['K_param'])
             len_param = self.param_lenK['len_param'][len_idx]
             len_param = torch.Tensor([len_param]).to(self.device).repeat(batch.shape[0],1).reshape(batch.shape[0],1)
+            
+            print('batch', batch.shape)
+            sample = batch.view(-1,23,6,196)  
+            # sample = torch.cat((sample[:,:21],torch.zeros([64,3,6,196]).to(sample.device),sample[:,-1].unsqueeze(1)),dim=1)
+            std_data, mean_data = self.data.dataset.t2m_dataset.return_scaler
+            print(std_data.shape)
+            print(mean_data.shape)
+            sample = self.data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()            
+            
+            
+            print('sample shape', sample.shape)
+            # rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(args.batch_size, n_frames).bool()
+            rot2xyz_mask = None
+            sample = self.model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep='rot6d', glob=True, translation=True,
+                                jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
+                                get_rotations_back=False)
+            sample = sample.cpu().numpy()
+            sample = sample[0].transpose(2,0,1)
+            print(sample.shape)
+            out_path = './'
+            save_file = 'gt_motion.gif'
+            skeleton = paramUtil.t2m_kinematic_chain
+            animation_save_path = os.path.join(out_path, save_file)
+            plot_3d_motion(animation_save_path, skeleton, sample, dataset='humanml', title='gt', fps=20)
+
+            sys.exit()
+            
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,

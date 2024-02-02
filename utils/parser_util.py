@@ -99,7 +99,7 @@ def add_model_options(parser):
 
 def add_data_options(parser):
     group = parser.add_argument_group('dataset')
-    group.add_argument("--dataset", default='humanml', choices=['humanml','humanml2', 'kit', 'humanact12', 'uestc'], type=str,
+    group.add_argument("--dataset", default='humanml', choices=['humanml','humanml2', 'kit', 'humanact12', 'uestc','LAFAN'], type=str,
                        help="Dataset name (choose from list).")
     group.add_argument("--data_dir", default="", type=str,
                        help="If empty, will use defaults according to the specified dataset.")
@@ -107,8 +107,9 @@ def add_data_options(parser):
 
 def add_training_options(parser):
     group = parser.add_argument_group('training')
-    group.add_argument("--param_lenK_path", default= './K_param_data196_fps20_dim263_len20.pkl', type=str,
+    group.add_argument("--param_lenK_path", default= './', type=str,
                        help="Path to GP parameter bag.")
+    group.add_argument("--corr_noise", default=False, type=bool, help="Use correlate noise.")
     group.add_argument("--save_dir", required=True, type=str,
                        help="Path to save checkpoints and results.")
     group.add_argument("--overwrite", action='store_true',
@@ -159,7 +160,11 @@ def add_sampling_options(parser):
 
 def add_generate_options(parser):
     group = parser.add_argument_group('generate')
-    group.add_argument("--motion_length", default=6.0, type=float,
+    group.add_argument("--param_lenK_path", default= './K_param_data196_fps20_dim263_len20.pkl', type=str,
+                    help="Path to GP parameter bag.")
+    group.add_argument("--len_idx", default=0, type=int,
+                    help="Choose the index of length parameters.")
+    group.add_argument("--motion_length", default=2, type=float,
                        help="The length of the sampled motion [in seconds]. "
                             "Maximum is 9.8 for HumanML3D (text-to-motion), and 2.0 for HumanAct12 (action-to-motion)")
     group.add_argument("--input_text", default='', type=str,

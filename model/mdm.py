@@ -165,7 +165,6 @@ class MDM(nn.Module):
             emb_gru = emb_gru.permute(1, 2, 0)      #[bs, d, #frames]
             emb_gru = emb_gru.reshape(bs, self.latent_dim, 1, nframes)  #[bs, d, 1, #frames]
             x = torch.cat((x_reshaped, emb_gru), axis=1)  #[bs, d+joints*feat, 1, #frames]
-
         x = self.input_process(x)
 
         if self.arch == 'trans_enc':

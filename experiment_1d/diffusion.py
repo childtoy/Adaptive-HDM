@@ -2206,6 +2206,9 @@ def eval_ddpm_1d(
             index = step
         ).reshape((-1,1,1)) # [n_sample x 1 x 1]
         # Sample
+        # add noise 
+        # noise_scale = th.normal(0, 2, size=(1,))
+        noise_scale = 1.0
         if t == 0: # last sampling, use mean
             x_t = mean_t
         else:
