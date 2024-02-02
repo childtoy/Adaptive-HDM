@@ -137,4 +137,4 @@ body_models
 *.pkl
 *.pt
 *.sh
-experiment_1d
+experiment_1d/
