@@ -250,7 +250,7 @@ def periodic_step(times,period,time_offset=0.0,y_min=0.0,y_max=1.0):
     return y
 
 def plot_ddpm_1d_result(
-    times,x_data, real_param, step_list,x_t_list,
+    times,x_data, step_list,x_t_list,real_param = None,
     plot_ancestral_sampling=True,
     plot_one_sample=False,
     lw_gt=1,lw_sample=1/2,
@@ -267,12 +267,12 @@ def plot_ddpm_1d_result(
     """
     # Select the data that matched to the len parameter
     target_value = len_param
-    indices = th.nonzero(real_param == target_value).squeeze()
-    x_data = x_data[indices, :, :][:30,:,:]
+    # indices = th.nonzero(real_param == target_value).squeeze()
+    # x_data = x_data[indices, :, :][:30,:,:]
 
     x_data_np = x_data.detach().cpu().numpy() # [n_data x C x L]
     n_data = x_data_np.shape[0] # number of GT data
-    
+    c_idxs = x_data_np.shape[1] 
     # Plot a seqeunce of ancestral sampling procedure
     if plot_ancestral_sampling:
         plt.figure(figsize=(15,2)); plt.rc('xtick',labelsize=6); plt.rc('ytick',labelsize=6)
@@ -288,28 +288,28 @@ def plot_ddpm_1d_result(
             plt.xlim([0.0,1.0]); plt.ylim(ylim)
             plt.xlabel('Time',fontsize=8); plt.title('Step:[%d]'%(t),fontsize=8)
         plt.tight_layout(); plt.show()
-    
-    # Plot generated data
-    plt.figure(figsize=figsize) 
-    x_0_np = x_t_list[0].detach().cpu().numpy() # [n_sample x C x L]
-    for i_idx in range(n_data): # GT
-        plt.plot(times.flatten(),x_data_np[i_idx,0,:],ls=ls_gt,color=lc_gt,lw=lw_gt)
-    n_sample = x_0_np.shape[0]
-    if plot_one_sample:
-        i_idx = np.random.randint(low=0,high=n_sample)
-        plt.plot(times.flatten(),x_0_np[i_idx,0,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
-    else:
-        for i_idx in range(n_sample): # sampled trajectories
-            plt.plot(times.flatten(),x_0_np[i_idx,0,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
-    plt.xlim([0.0,1.0]); plt.ylim(ylim)
-    plt.xlabel('Time',fontsize=8)
-    if title_str is None:
-        plt.title(f'Groundtruth and Generated trajectories of {len_param}',fontsize=10)
-    else:
-        plt.title(title_str,fontsize=10)
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(os.path.join(output, f'generated_{len_param}.png'))
+    for c_idx in range(c_idxs) : 
+        # Plot generated data
+        plt.figure(figsize=figsize) 
+        x_0_np = x_t_list[0].detach().cpu().numpy() # [n_sample x C x L]
+        for i_idx in range(n_data): # GT
+            plt.plot(times.flatten(),x_data_np[i_idx,c_idx,:],ls=ls_gt,color=lc_gt,lw=lw_gt)
+        n_sample = x_0_np.shape[0]
+        if plot_one_sample:
+            i_idx = np.random.randint(low=0,high=n_sample)
+            plt.plot(times.flatten(),x_0_np[i_idx,c_idx,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
+        else:
+            for i_idx in range(n_sample): # sampled trajectories
+                plt.plot(times.flatten(),x_0_np[i_idx,c_idx,:],ls=ls_sample,color=lc_sample,lw=lw_sample)
+        plt.xlim([0.0,1.0]); plt.ylim(ylim)
+        plt.xlabel('Time',fontsize=8)
+        # if title_str is None:
+        plt.title(f'[{c_idx}] Groundtruth and Generated trajectories_iter:{title_str}',fontsize=10)
+        # else:
+            # plt.title(f'[{c_idx}] '+title_str,fontsize=10)
+        plt.tight_layout()
+        plt.show()
+        plt.savefig(os.path.join(output, f'generated_{c_idx}_it{title_str}.png'))
 
 def plot_ddpm_2d_data_result(
     times,x_data, real_param, step_list,x_t_list,

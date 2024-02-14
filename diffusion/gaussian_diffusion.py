@@ -247,7 +247,7 @@ class GaussianDiffusion:
         return (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
             + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
-            * noise
+            * noise * th.rand(1).to(noise.device)*2
         )
 
     def q_posterior_mean_variance(self, x_start, x_t, t):
@@ -275,7 +275,7 @@ class GaussianDiffusion:
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(
-        self, model, x, t, K_params, clip_denoised=True, denoised_fn=None, model_kwargs=None
+        self, model, x, t, len_param, clip_denoised=True, denoised_fn=None, model_kwargs=None
     ):
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
@@ -302,8 +302,8 @@ class GaussianDiffusion:
 
         B, C = x.shape[:2]
         assert t.shape == (B,)
-        model_output = model(x, self._scale_timesteps(t), K_params, **model_kwargs)
-
+        model_output = model(x, self._scale_timesteps(t), len_param, **model_kwargs)
+        
         if 'inpainting_mask' in model_kwargs['y'].keys() and 'inpainted_motion' in model_kwargs['y'].keys():
             inpainting_mask, inpainted_motion = model_kwargs['y']['inpainting_mask'], model_kwargs['y']['inpainted_motion']
             assert self.model_mean_type == ModelMeanType.START_X, 'This feature supports only X_start pred for mow!'
@@ -499,6 +499,7 @@ class GaussianDiffusion:
         x,
         t,
         K_params,
+        len_param,
         clip_denoised=True,
         denoised_fn=None,
         cond_fn=None,
@@ -526,12 +527,20 @@ class GaussianDiffusion:
             model,
             x,
             t,
-            K_params,
+            len_param,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
         )
         noise = th.randn_like(x)
+
+        if K_params is not None : 
+            noise_expand = noise.squeeze(2).unsqueeze(-1)
+            K_chols = th.Tensor(K_params).to(x.device)
+            K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)) # [B x D x L x L]
+            noise = K_chols_torch_tile @ noise_expand.to(x.device) # [B x D x L x 1]
+            noise = noise.squeeze(dim=3) # [B x D x L]
+            noise = noise.unsqueeze(2)
         # print('const_noise', const_noise)
         if const_noise:
             noise = noise[[0]].repeat(x.shape[0], 1, 1, 1)
@@ -546,7 +555,7 @@ class GaussianDiffusion:
         # print('mean', out["mean"].shape, out["mean"])
         # print('log_variance', out["log_variance"].shape, out["log_variance"])
         # print('nonzero_mask', nonzero_mask.shape, nonzero_mask)
-        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise * th.rand(1).to(noise.device)*0.1
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def p_sample_with_grad(
@@ -603,6 +612,8 @@ class GaussianDiffusion:
         self,
         model,
         shape,
+        K_params,
+        len_param,
         noise=None,
         clip_denoised=True,
         denoised_fn=None,
@@ -644,6 +655,8 @@ class GaussianDiffusion:
         for i, sample in enumerate(self.p_sample_loop_progressive(
             model,
             shape,
+            K_params=K_params,
+            len_param=len_param,
             noise=noise,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
@@ -669,6 +682,7 @@ class GaussianDiffusion:
         model,
         shape,
         K_params,
+        len_param,
         noise=None,
         clip_denoised=True,
         denoised_fn=None,
@@ -697,6 +711,14 @@ class GaussianDiffusion:
             img = noise
         else:
             img = th.randn(*shape, device=device)
+            if K_params is not None : 
+                img_expand = img.squeeze(2).unsqueeze(-1)
+                K_chols = th.Tensor(K_params).to(device)
+                K_chols_torch_tile = th.tile(input=K_chols,dims=(shape[0],1,1,1)) # [B x D x L x L]
+                img = K_chols_torch_tile @ img_expand.to(device) # [B x D x L x 1]
+                img = img.squeeze(dim=3) # [B x D x L]
+                img = img.unsqueeze(2)
+
 
         if skip_timesteps and init_image is None:
             init_image = th.zeros_like(img)
@@ -726,6 +748,7 @@ class GaussianDiffusion:
                     img,
                     t,
                     K_params,
+                    len_param,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     cond_fn=cond_fn,
@@ -1274,6 +1297,10 @@ class GaussianDiffusion:
             noise_expand = noise.squeeze(2).unsqueeze(-1)
             K_chols = th.Tensor(K_params).to(x_start.device)
             K_chols_torch_tile = th.tile(input=K_chols,dims=(x_start.shape[0],1,1,1)) # [B x D x L x L]
+            #debug adjust only root position 
+            # K_chols_torch_tile[:,:-6,:,:] = 1e-5
+            # K_chols_torch_tile[:,-3:,:,:] = 1e-5 
+            #debug end            
             noise = K_chols_torch_tile @ noise_expand.to(x_start.device) # [B x D x L x 1]
             noise = noise.squeeze(dim=3) # [B x D x L]
             noise = noise.unsqueeze(2)
@@ -1327,7 +1354,6 @@ class GaussianDiffusion:
                 ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
-
             terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
             target_xyz, model_output_xyz = None, None

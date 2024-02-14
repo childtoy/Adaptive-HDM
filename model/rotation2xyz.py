@@ -37,6 +37,8 @@ class Rotation2xyz:
 
         x_rotations = x_rotations.permute(0, 3, 1, 2)
         nsamples, time, njoints, feats = x_rotations.shape
+        print('x_rotations',x_rotations.shape)
+        print('x_rotations[maks]',x_rotations[mask].shape)
 
         # Compute rotations (convert only masked sequences output)
         if pose_rep == "rotvec":
@@ -63,6 +65,9 @@ class Rotation2xyz:
                                 dtype=rotations.dtype, device=rotations.device)
             betas[:, 1] = beta
             # import ipdb; ipdb.set_trace()
+        print(rotations.shape)
+        print(global_orient.shape)
+        print(betas.shape)
         out = self.smpl_model(body_pose=rotations, global_orient=global_orient, betas=betas)
 
         # get the desirable joints
