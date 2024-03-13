@@ -21,8 +21,8 @@ from eval import eval_humanml, eval_humanact12_uestc
 from data_loaders.get_data import get_dataset_loader
 from data_loaders.humanml.utils.plot_script import plot_3d_motion
 import data_loaders.humanml.utils.paramUtil as paramUtil
-
 import sys
+
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
@@ -236,7 +236,7 @@ class TrainLoop:
             std_data, mean_data = self.data.dataset.t2m_dataset.return_scaler
             print(std_data.shape)
             print(mean_data.shape)
-            sample = self.data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()            
+            # sample = self.data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()            
             
             
             print('sample shape', sample.shape)

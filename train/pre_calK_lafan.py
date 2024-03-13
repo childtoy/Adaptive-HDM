@@ -31,7 +31,7 @@ def main():
     for len_idx in range(len(lens_array)):        
         for d_idx in range(num_dim):
             hyp_len = lens_array[len_idx]
-            K = k_se(x1=t_data, x2=t_data, gain=1.0, hyp_len=hyp_len)
+            K = k_se(x1=t_data, x2=t_data, gain=0.1, hyp_len=hyp_len)
             K = K + 1e-6*np.eye(num_data,num_data)
             U, V = np.linalg.eigh(K,UPLO='L')
             decom_K[len_idx,d_idx,:,:] = V @ np.diag(np.sqrt(U)) # [L x L]

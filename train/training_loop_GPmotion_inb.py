@@ -35,11 +35,12 @@ INITIAL_LOG_LOSS_SCALE = 20.0
 
 
 class TrainLoop:
-    def __init__(self, args, train_platform, model, diffusion, data):
+    def __init__(self, args, train_platform, model, len_model, diffusion, data):
         self.args = args
         self.dataset = args.dataset
         self.train_platform = train_platform
         self.model = model
+        self.len_model = len_model
         self.diffusion = diffusion
         self.cond_mode = model.cond_mode
         self.data = data
@@ -55,12 +56,12 @@ class TrainLoop:
         self.lr_anneal_steps = args.lr_anneal_steps
     
         # print(args.corr_noise)
-        # if args.corr_noise :
-        #     with open(args.param_lenK_path, 'rb') as f : 
-        #         self.param_lenK = pkl.load(f)
-        #     self.num_len = len(self.param_lenK['K_param'])
-        # else : 
-        self.param_lenK = None
+        if args.corr_noise :
+            with open(args.param_lenK_path, 'rb') as f : 
+                self.param_lenK = pkl.load(f)
+            self.num_len = len(self.param_lenK['K_param'])
+        else : 
+            self.param_lenK = None
         self.num_len = 0 
                         
         self.step = 0
@@ -91,7 +92,7 @@ class TrainLoop:
 
         self.device = torch.device("cpu")
         if torch.cuda.is_available() and dist_util.dev() != 'cpu':
-            self.device = torch.device(dist_util.dev())
+            self.device = torch.device(dist_util.dev())        
 
         self.schedule_sampler_type = 'uniform'
         self.schedule_sampler = create_named_schedule_sampler(self.schedule_sampler_type, diffusion)
@@ -156,8 +157,21 @@ class TrainLoop:
                     break
 
                 motion = motion.to(self.device)
+                if self.args.corr_noise :        
+                    with torch.no_grad():
+                        # B D 1 L 
+                        B, D, _, L = motion.shape
+                        motion = motion.squeeze(2).reshape(B*D, 1, L)
+                        output = self.len_model(motion)
+                        _, pred_idx = torch.max(output.data, 1)
+
+                        motion = motion.reshape(B, D, 1, L)
+    
+                else :
+                    pred_idx = None
+
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
-                self.run_step(motion, cond)
+                self.run_step(motion, cond, pred_idx)
                 if self.step % self.log_interval == 0:
                     for k,v in logger.get_current().dumpkvs().items():
                         if k == 'loss':
@@ -225,13 +239,13 @@ class TrainLoop:
         print(f'Evaluation time: {round(end_eval-start_eval)/60}min')
 
 
-    def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
+    def run_step(self, batch, cond, pred_lens):
+        self.forward_backward(batch, cond, pred_lens)
         self.mp_trainer.optimize(self.opt)
         self._anneal_lr()
         self.log_step()
 
-    def forward_backward(self, batch, cond):
+    def forward_backward(self, batch, cond, pred_lens):
         self.mp_trainer.zero_grad()
         for i in range(0, batch.shape[0], self.microbatch):
             # Eliminates the microbatch feature
@@ -241,11 +255,9 @@ class TrainLoop:
             micro_cond = cond
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
-            if self.param_lenK is not None : 
-                len_idx = random.randint(0, self.num_len-1)
-                K_param = random.choice(self.param_lenK['K_param'])
-                len_param = self.param_lenK['len_param'][len_idx]
-                len_param = torch.Tensor([len_param]).to(self.device).repeat(batch.shape[0],1).reshape(batch.shape[0],1)
+            if self.args.corr_noise : 
+                len_param = self.param_lenK['len_param'][pred_lens]
+                len_param = len_param.reshape(batch.shape[0],-1)
             else : 
                 K_param = None
                 len_param = None            

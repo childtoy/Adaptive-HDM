@@ -49,13 +49,18 @@ def main():
     # print(f"Horizon with Conditioning: {horizon}")
     # print(f"Interpolation Mode: {opt.interpolation}")
     print("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(args, data)
+    model, diffusion, len_model = create_model_and_diffusion(args, data)
+    if args.corr_noise :
+        len_model.to(dist_util.dev())
+        len_model.load_state_dict(torch.load(args.len_model_path)['model_state_dict'])
+        len_model.eval()
+    
     model.to(dist_util.dev())
     model.rot2xyz.smpl_model.eval()
 
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters_wo_clip()) / 1000000.0))
     print("Training...")
-    TrainLoop(args, train_platform, model, diffusion, data).run_loop()
+    TrainLoop(args, train_platform, model, len_model, diffusion, data).run_loop()
     train_platform.close()
 
 if __name__ == "__main__":

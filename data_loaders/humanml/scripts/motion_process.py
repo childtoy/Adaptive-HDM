@@ -431,7 +431,6 @@ def recover_rot_input(data):
     cont6d_params = cont6d_params.view(B,L,-1)
     return cont6d_params
 
-
 def recover_from_ric(data, joints_num):
     r_rot_quat, r_pos = recover_root_rot_pos(data)
     positions = data[..., 4:(joints_num - 1) * 3 + 4]

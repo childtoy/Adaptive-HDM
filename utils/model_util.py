@@ -2,7 +2,7 @@ from model.mdm import MDM
 from diffusion import gaussian_diffusion as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
-
+from LPM.model import DiffusionUNetLegacy
 def load_model_wo_clip(model, state_dict):
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
     assert len(unexpected_keys) == 0
@@ -12,8 +12,34 @@ def load_model_wo_clip(model, state_dict):
 def create_model_and_diffusion(args, data):
     model = MDM(**get_model_args(args, data))
     diffusion = create_gaussian_diffusion(args)
-    return model, diffusion
+    if args.corr_noise :
+        len_model = DiffusionUNetLegacy()
+    else : 
+        len_model = None
+    return model, diffusion, len_model
 
+def get_len_model_args(args):
+    name                 = 'unet',
+    dims                 = 1, # spatial dimension, if dims==1, [B x C x L], if dims==2, [B x C x W x H]
+    length               = 30, 
+    n_in_channels        = 128, # input channels
+    n_base_channels      = 64, # base channel size
+    n_emb_dim            = 128, # time embedding size
+    n_cond_dim           = 0, # conditioning vector size (default is 0 indicating an unconditional model)
+    n_time_dim           = 0,
+    n_enc_blocks         = 3, # number of encoder blocks
+    n_groups             = 16, # group norm paramter
+    n_heads              = 4, # number of heads
+    actv                 = nn.SiLU(),
+    kernel_size          = 3, # kernel size
+    padding              = 1,
+    use_attention        = True,
+    skip_connection      = True, # (optional) additional final skip connection
+    use_scale_shift_norm = True, # positional embedding handling
+    chnnel_multiples     = (1,2,4),
+    updown_rates         = (2,2,2),
+    device               = 'cpu',
+    return 
 def get_model_args(args, data):
 
     # default args

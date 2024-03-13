@@ -1,1 +1,1 @@
-python3 -m train.train_GPmotion_inb --save_dir save/gp_mean_inb_no_corr_forwardscale --dataset LAFAN --pred_xstart false --corr_noise false --cond_mask_prob 0 --unconstrained --device 3
+python3 -m train.train_GPmotion_inb --save_dir save/gp_mean_inb_no_corr_forwardscale --dataset LAFAN --pred_xstart --cond_mask_prob 0 --unconstrained --device 0

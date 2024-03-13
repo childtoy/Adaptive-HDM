@@ -20,23 +20,23 @@ class DiffusionUNetLegacy(nn.Module):
         self,
         name                 = 'unet',
         dims                 = 1, # spatial dimension, if dims==1, [B x C x L], if dims==2, [B x C x W x H]
-        length               = 30, 
-        n_in_channels        = 128, # input channels
-        n_base_channels      = 64, # base channel size
+        length               = 60, 
+        n_in_channels        = 1, # input channels
+        n_base_channels      = 128, # base channel size
         n_emb_dim            = 128, # time embedding size
         n_cond_dim           = 0, # conditioning vector size (default is 0 indicating an unconditional model)
         n_time_dim           = 0,
-        n_enc_blocks         = 3, # number of encoder blocks
+        n_enc_blocks         = 7, # number of encoder blocks
         n_groups             = 16, # group norm paramter
         n_heads              = 4, # number of heads
         actv                 = nn.SiLU(),
         kernel_size          = 3, # kernel size
         padding              = 1,
-        use_attention        = True,
+        use_attention        = False,
         skip_connection      = True, # (optional) additional final skip connection
         use_scale_shift_norm = True, # positional embedding handling
-        chnnel_multiples     = (1,2,4),
-        updown_rates         = (2,2,2),
+        chnnel_multiples     = (1,2,2,2,4,4,8),
+        updown_rates         = (1,1,2,1,2,1,2),
         device               = 'cpu',
     ):
         super().__init__()

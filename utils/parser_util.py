@@ -71,7 +71,7 @@ def add_diffusion_options(parser):
                        help="Number of diffusion steps (denoted T in the paper)")
     group.add_argument("--sigma_small", default=True, type=bool, help="Use smaller sigma values.")
 
-    group.add_argument("--pred_xstart", default=True, type=bool, help="Prediction xstart. If false pred noise.")
+    group.add_argument("--pred_xstart", action='store_true', help="Prediction xstart. If false pred noise.")
 
 def add_model_options(parser):
     group = parser.add_argument_group('model')
@@ -109,7 +109,9 @@ def add_training_options(parser):
     group = parser.add_argument_group('training')
     group.add_argument("--param_lenK_path", default= './', type=str,
                        help="Path to GP parameter bag.")
-    group.add_argument("--corr_noise", default=False, type=bool, help="Use correlate noise.")
+    group.add_argument("--len_model_path", default= './', type=str,
+                       help="Path to GP parameter bag.")
+    group.add_argument("--corr_noise", action='store_true', help="Use correlate noise.")
     group.add_argument("--save_dir", required=True, type=str,
                        help="Path to save checkpoints and results.")
     group.add_argument("--overwrite", action='store_true',
