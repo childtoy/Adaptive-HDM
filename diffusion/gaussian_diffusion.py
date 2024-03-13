@@ -555,7 +555,8 @@ class GaussianDiffusion:
         # print('mean', out["mean"].shape, out["mean"])
         # print('log_variance', out["log_variance"].shape, out["log_variance"])
         # print('nonzero_mask', nonzero_mask.shape, nonzero_mask)
-        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise * th.rand(1).to(noise.device)*0.1
+        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise 
+        # * th.rand(1).to(noise.device)*0.1
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def p_sample_with_grad(
