@@ -42,7 +42,7 @@ def main():
     dist_util.setup_dist(args.device)
 
     print("creating data loader...")
-    data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames)
+    data, dataset = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames)
     
     # Load LAFAN Dataset
     # print(f"Horizon: {horizon}")
@@ -57,10 +57,9 @@ def main():
     
     model.to(dist_util.dev())
     model.rot2xyz.smpl_model.eval()
-
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters_wo_clip()) / 1000000.0))
     print("Training...")
-    TrainLoop(args, train_platform, model, len_model, diffusion, data).run_loop()
+    TrainLoop(args, train_platform, model, len_model, diffusion, data, dataset).run_loop()
     train_platform.close()
 
 if __name__ == "__main__":

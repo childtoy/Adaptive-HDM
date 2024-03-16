@@ -22,12 +22,11 @@ from data_loaders.get_data import get_dataset_loader
 from data_loaders.humanml.utils.plot_script import plot_3d_motion
 import data_loaders.humanml.utils.paramUtil as paramUtil
 
-from data_loaders.humanml.utils.plot_script import plot_3d_motion
 from cmib.model.skeleton import (Skeleton, sk_joints_to_remove, sk_offsets, sk_parents, sk_skeleton_part)
 from data_loaders.humanml.common.quaternion import cont6d_to_quat
+from data_loaders.tensors import collate
+import pickle as pkl
 
-
-import sys
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
@@ -35,7 +34,7 @@ INITIAL_LOG_LOSS_SCALE = 20.0
 
 
 class TrainLoop:
-    def __init__(self, args, train_platform, model, len_model, diffusion, data):
+    def __init__(self, args, train_platform, model, len_model, diffusion, data, dataset):
         self.args = args
         self.dataset = args.dataset
         self.train_platform = train_platform
@@ -54,7 +53,7 @@ class TrainLoop:
         self.fp16_scale_growth = 1e-3  # deprecating this option
         self.weight_decay = args.weight_decay
         self.lr_anneal_steps = args.lr_anneal_steps
-    
+        self.dataset = dataset
         # print(args.corr_noise)
         if args.corr_noise :
             with open(args.param_lenK_path, 'rb') as f : 
@@ -203,37 +202,102 @@ class TrainLoop:
         if not self.args.eval_during_training:
             return
         start_eval = time.time()
-        if self.eval_wrapper is not None:
-            print('Running evaluation loop: [Should take about 90 min]')
-            log_file = os.path.join(self.save_dir, f'eval_humanml_{(self.step + self.resume_step):09d}.log')
-            diversity_times = 300
-            mm_num_times = 0  # mm is super slow hence we won't run it during training
-            eval_dict = eval_humanml.evaluation(
-                self.eval_wrapper, self.eval_gt_data, self.eval_data, log_file,
-                replication_times=self.args.eval_rep_times, diversity_times=diversity_times, mm_num_times=mm_num_times, run_mm=False)
-            print(eval_dict)
-            for k, v in eval_dict.items():
-                if k.startswith('R_precision'):
-                    for i in range(len(v)):
-                        self.train_platform.report_scalar(name=f'top{i + 1}_' + k, value=v[i],
-                                                          iteration=self.step + self.resume_step,
-                                                          group_name='Eval')
-                else:
-                    self.train_platform.report_scalar(name=k, value=v, iteration=self.step + self.resume_step,
-                                                      group_name='Eval')
+        collate_args = [{'inp': torch.zeros(60), 'tokens': None, 'lengths': 60}] * 1
+        _, model_kwargs = collate(collate_args)
+        all_motions = []
+        all_lengths = []
+        all_text = []
+        # if self.args.corr_noise : 
+        #     K_params = param_lenK['K_param'][args.len_idx]
+        #     print('# of len params :', len(K_params))
+        #     len_param = param_lenK['len_param'][args.len_idx]
+        #     len_param = torch.Tensor([len_param]).to(dist_util.dev()).repeat(args.batch_size,1).reshape(args.batch_size,1)
+        # else : 
+        K_params = None
+        len_param = None
 
-        elif self.dataset in ['humanact12', 'uestc']:
-            eval_args = SimpleNamespace(num_seeds=self.args.eval_rep_times, num_samples=self.args.eval_num_samples,
-                                        batch_size=self.args.eval_batch_size, device=self.device, guidance_param = 1,
-                                        dataset=self.dataset, unconstrained=self.args.unconstrained,
-                                        model_path=os.path.join(self.save_dir, self.ckpt_file_name()))
-            eval_dict = eval_humanact12_uestc.evaluate(eval_args, model=self.model, diffusion=self.diffusion, data=self.data.dataset)
-            print(f'Evaluation results on {self.dataset}: {sorted(eval_dict["feats"].items())}')
-            for k, v in eval_dict["feats"].items():
-                if 'unconstrained' not in k:
-                    self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval')
-                else:
-                    self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval Unconstrained')
+        offset = sk_offsets 
+        skeleton_mocap = Skeleton(offsets=offset, parents=sk_parents, device=self.device)
+        skeleton_mocap.remove_joints(sk_joints_to_remove)
+
+        skeleton_mocap._parents
+        self.model.eval()
+        sample_fn = self.diffusion.p_sample_loop
+        sample = sample_fn(
+            self.model,
+            # (args.batch_size, model.njoints, model.nfeats, n_frames),  # BUG FIX - this one caused a mismatch between training and inference
+            (1, self.model.njoints, self.model.nfeats, 60),  # BUG FIX
+            K_params,
+            len_param,
+            clip_denoised=False,
+            model_kwargs=model_kwargs,
+            skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
+            init_image=None,
+            progress=True,
+            dump_steps=None,
+            noise=None,
+            const_noise=False,
+        )        
+        
+        
+        sample = sample[0].permute(2,1,0).reshape(60,23,6).unsqueeze(0)
+        offset = sk_offsets 
+        skeleton_mocap = Skeleton(offsets=offset, parents=sk_parents, device=self.device)
+        skeleton_mocap.remove_joints(sk_joints_to_remove)
+        skeleton_mocap._parents
+        # sample = torch.Tensor(input_data).unsqueeze(0)
+        # sample = input_data
+        mean_root = torch.Tensor(self.dataset.mean_root).to(self.device)
+        std_root = torch.Tensor(self.dataset.std_root).to(self.device)
+        mean_rot = torch.Tensor(self.dataset.mean_rot).to(self.device)
+        std_rot = torch.Tensor([self.dataset.std_rot]).to(self.device)
+        root_pos = sample[:,:,-1,:3] * std_root +  mean_root.unsqueeze(0)
+        rot_6d = sample[:,:,:-1,:] * std_rot + mean_rot.unsqueeze(0)
+        # print(rot_6d.shape)
+        rot_quat = cont6d_to_quat(torch.Tensor(rot_6d).to(self.device))
+        # # rot_quat = rot_quat.reshape(-1,60,22,4)
+        local_q_normalized = torch.nn.functional.normalize(rot_quat, p=2.0, dim=-1)
+        global_pos, global_q = skeleton_mocap.forward_kinematics_with_rotation(local_q_normalized, torch.Tensor(root_pos).to(self.device))
+        global_pos_tmp = global_pos
+        global_pos[:,:,:,2] = global_pos_tmp[:,:,:,1]
+        global_pos[:,:,:,1] = global_pos_tmp[:,:,:,2]
+        caption = 'unconditioned_LAFAN_step : ' + str(self.step)
+        # motion = global_pos[0].cpu().numpy().transpose(2, 0, 1)
+        motion = global_pos[0].cpu().numpy()
+        animation_save_path = os.path.join(self.save_dir, 'result_inb-'+str(self.step)+'.gif')
+        plot_3d_motion(animation_save_path, sk_skeleton_part, motion, dataset='LAFAN', title=caption, fps=30)
+        self.model.train()
+        # if self.eval_wrapper is not None:
+        #     print('Running evaluation loop: [Should take about 90 min]')
+        #     log_file = os.path.join(self.save_dir, f'eval_humanml_{(self.step + self.resume_step):09d}.log')
+        #     diversity_times = 300
+        #     mm_num_times = 0  # mm is super slow hence we won't run it during training
+        #     eval_dict = eval_humanml.evaluation(
+        #         self.eval_wrapper, self.eval_gt_data, self.eval_data, log_file,
+        #         replication_times=self.args.eval_rep_times, diversity_times=diversity_times, mm_num_times=mm_num_times, run_mm=False)
+        #     print(eval_dict)
+        #     for k, v in eval_dict.items():
+        #         if k.startswith('R_precision'):
+        #             for i in range(len(v)):
+        #                 self.train_platform.report_scalar(name=f'top{i + 1}_' + k, value=v[i],
+        #                                                   iteration=self.step + self.resume_step,
+        #                                                   group_name='Eval')
+        #         else:
+        #             self.train_platform.report_scalar(name=k, value=v, iteration=self.step + self.resume_step,
+        #                                               group_name='Eval')
+
+        # elif self.dataset in ['humanact12', 'uestc']:
+        #     eval_args = SimpleNamespace(num_seeds=self.args.eval_rep_times, num_samples=self.args.eval_num_samples,
+        #                                 batch_size=self.args.eval_batch_size, device=self.device, guidance_param = 1,
+        #                                 dataset=self.dataset, unconstrained=self.args.unconstrained,
+        #                                 model_path=os.path.join(self.save_dir, self.ckpt_file_name()))
+        #     eval_dict = eval_humanact12_uestc.evaluate(eval_args, model=self.model, diffusion=self.diffusion, data=self.data.dataset)
+        #     print(f'Evaluation results on {self.dataset}: {sorted(eval_dict["feats"].items())}')
+        #     for k, v in eval_dict["feats"].items():
+        #         if 'unconstrained' not in k:
+        #             self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval')
+        #         else:
+        #             self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval Unconstrained')
 
         end_eval = time.time()
         print(f'Evaluation time: {round(end_eval-start_eval)/60}min')

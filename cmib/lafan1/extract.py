@@ -230,8 +230,7 @@ def get_lafan1_set(bvh_path, actors, window=50, offset=20, train=True, stats=Fal
                     contacts_l.append(c_l)
                     contacts_r.append(c_r)
 
-                    i += offset
-
+                    i += offset       
     X = np.asarray(X)
     Q = np.asarray(Q)
     contacts_l = np.asarray(contacts_l)

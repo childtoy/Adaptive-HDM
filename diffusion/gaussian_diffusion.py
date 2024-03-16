@@ -247,7 +247,8 @@ class GaussianDiffusion:
         return (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
             + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
-            * noise * th.rand(1).to(noise.device)*2
+            * noise 
+            # * th.rand(1).to(noise.device)*2
         )
 
     def q_posterior_mean_variance(self, x_start, x_t, t):

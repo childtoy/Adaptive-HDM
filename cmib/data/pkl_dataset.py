@@ -63,8 +63,28 @@ class LAFAN1Dataset():
         input_data["rot_6d"] = quaternion_to_cont6d_np(Q)[:, 9:self.window-1, :, :]
         input_data["root_p"] = global_pos[:, 9:self.window-1, 0, :]
         N, L, J, D = global_pos.shape
+
+
+        mean_root = global_pos[:, 9:self.window-1, 0, :].mean(axis=0)
+        std_root = global_pos[:, 9:self.window-1, 0, :].std(axis=0)
+        std_root_xy =  std_root[:,[0,2]].mean()
+        std_root_z = std_root[:,1].mean()
+        
+        std_root_xzy = np.array([std_root_xy, std_root_z, std_root_xy])
+        mean_rot = input_data["rot_6d"].mean(axis=0)
+        std_rot = input_data["rot_6d"].std(axis=0)
+        std_rot = std_rot.mean()
+        input_data["mean_root"] = mean_root
+        input_data["std_root"] = std_root_xzy
+        input_data["mean_rot"] = mean_rot
+        input_data["std_rot"] = std_rot
+        root_norm = (global_pos[:, 9:self.window-1, 0, :] - np.expand_dims(mean_root,axis=0))/std_root_xzy
+        rot_norm = (input_data["rot_6d"] - mean_rot) / std_rot
         padded_root = np.concatenate([global_pos[:, 9:self.window-1, 0:1, :], np.zeros([N,self.window-10,1,3])], axis=-1)
+        padded_root_norm = np.concatenate([np.expand_dims(root_norm, axis=2), np.zeros([N,self.window-10,1,3])], axis=-1)
         input_data["input_data"] = np.concatenate([input_data["rot_6d"], padded_root], axis=2)
+        input_data["input_norm"] = np.concatenate([rot_norm, padded_root_norm], axis=2)
+
         # sample = input_data["input_data"]
         # print(sample.shape)
         # # sample = input_data
