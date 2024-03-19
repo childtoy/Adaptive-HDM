@@ -5,12 +5,33 @@ import matplotlib.pyplot as plt
 import torch as th
 import torch.nn as nn
 
-from experiment_1d.module import (
+from module import (
     conv_nd,
     ResBlock,
     AttentionBlock,
     TimestepEmbedSequential,
 )
+
+
+def timestep_embedding(timesteps, dim, max_period=10000):
+    """
+    Create sinusoidal timestep embeddings.
+
+    :param timesteps: a 1-D Tensor of N indices, one per batch element.
+                      These may be fractional.
+    :param dim: the dimension of the output.
+    :param max_period: controls the minimum frequency of the embeddings.
+    :return: an [N x dim] Tensor of positional embeddings.
+    """
+    half = dim // 2
+    freqs = th.exp(
+        -math.log(max_period) * th.arange(start=0, end=half, dtype=th.float32) / half
+    ).to(device=timesteps.device)
+    args = timesteps[:, None].float() * freqs[None]
+    embedding = th.cat([th.cos(args), th.sin(args)], dim=-1)
+    if dim % 2:
+        embedding = th.cat([embedding, th.zeros_like(embedding[:, :1])], dim=-1)
+    return embedding
 
 class DiffusionUNetLegacy(nn.Module):
     """ 
@@ -20,23 +41,23 @@ class DiffusionUNetLegacy(nn.Module):
         self,
         name                 = 'unet',
         dims                 = 1, # spatial dimension, if dims==1, [B x C x L], if dims==2, [B x C x W x H]
-        length               = 60, 
-        n_in_channels        = 1, # input channels
-        n_base_channels      = 128, # base channel size
+        length               = 30, 
+        n_in_channels        = 128, # input channels
+        n_base_channels      = 64, # base channel size
         n_emb_dim            = 128, # time embedding size
         n_cond_dim           = 0, # conditioning vector size (default is 0 indicating an unconditional model)
         n_time_dim           = 0,
-        n_enc_blocks         = 7, # number of encoder blocks
+        n_enc_blocks         = 3, # number of encoder blocks
         n_groups             = 16, # group norm paramter
         n_heads              = 4, # number of heads
         actv                 = nn.SiLU(),
         kernel_size          = 3, # kernel size
         padding              = 1,
-        use_attention        = False,
+        use_attention        = True,
         skip_connection      = True, # (optional) additional final skip connection
         use_scale_shift_norm = True, # positional embedding handling
-        chnnel_multiples     = (1,2,2,2,4,4,8),
-        updown_rates         = (1,1,2,1,2,1,2),
+        chnnel_multiples     = (1,2,4),
+        updown_rates         = (2,2,2),
         device               = 'cpu',
     ):
         super().__init__()
@@ -46,6 +67,7 @@ class DiffusionUNetLegacy(nn.Module):
         self.n_base_channels      = n_base_channels
         self.n_emb_dim            = n_emb_dim
         self.n_cond_dim           = n_cond_dim
+        self.n_time_dim           = n_time_dim
         self.n_enc_blocks         = n_enc_blocks
         self.n_groups             = n_groups
         self.n_heads              = n_heads
@@ -59,6 +81,14 @@ class DiffusionUNetLegacy(nn.Module):
         self.updown_rates         = updown_rates
         self.device               = device
         
+        # Time embedding
+        if self.n_time_dim > 0:
+            self.time_embed = nn.Sequential(
+                nn.Linear(in_features=self.n_base_channels,out_features=self.n_emb_dim),
+                nn.SiLU(),
+                nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
+            ).to(self.device)
+            
         # Conditional embedding
         if self.n_cond_dim > 0:
             self.cond_embed = nn.Sequential(
@@ -125,10 +155,15 @@ class DiffusionUNetLegacy(nn.Module):
             kernel_size  = 1,
         ).to(device)
         
+        if length == 32:
+            input_dim = 4096
+        else:
+            input_dim = 7168 # when frames 60: latent dim (B, 1024, 7) -> flatten (1024*7) = (7168)
+            
         # For Classification
         self.proj = nn.Sequential(
             nn.Dropout(0.25),
-            nn.Linear(in_features=4096,out_features=1024),
+            nn.Linear(in_features=input_dim,out_features=1024),
             nn.GELU(),
             nn.LayerNorm(1024),
             nn.Dropout(0.5), 
@@ -158,6 +193,12 @@ class DiffusionUNetLegacy(nn.Module):
         
         emb = th.Tensor(0).to(self.device) 
         
+        if self.n_time_dim > 0:
+        # time embedding        
+            emb = self.time_embed(
+                timestep_embedding(timesteps,self.n_base_channels)
+            ) # [B x n_emb_dim]
+            
         # conditional embedding
         if self.n_cond_dim > 0:
             cond = self.cond_embed(c)

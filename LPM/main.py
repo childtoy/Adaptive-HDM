@@ -11,19 +11,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dataset import get_1d_data
 from model import (
-    get_ddpm_constants,
     DiffusionUNetLegacy,
 )
 
 def main(args):
     starttime = dt.datetime.now()
     print(f'> > Train START {starttime.hour}:{starttime.minute}:{starttime.second}')
-
-    dc = get_ddpm_constants(
-        schedule_name = 'cosine', # 'linear', 'cosine'
-        T             = 1000,
-        np_type       = np.float32,
-    )
 
     output_pth = f'./result/{args.name}'
     if not os.path.exists(output_pth):
@@ -39,7 +32,7 @@ def main(args):
     
     model = DiffusionUNetLegacy(
         name                 = 'unet',
-        length               = 32, 
+        length               = 60, 
         dims                 = 1,
         n_in_channels        = 1,
         n_base_channels      = 128,
@@ -66,16 +59,23 @@ def main(args):
         model.load_state_dict(torch.load(args.ckpt)['model_state_dict'])
     
     # Dataset
-    train_data = np.load('./train_norm.npy', allow_pickle=True)
-    train_data = train_data.item()
-    train_x_0 = train_data['x_0']
-    train_label = train_data['real_param']
+    train_times, train_x_0, train_label = get_1d_data(
+        n_traj    = 600,
+        L         = 60,
+        device    = device,
+        seed      = 0,
+        )
 
-    val_data = np.load('./val_norm.npy', allow_pickle=True)
-    val_data = val_data.item()
-    val_x_0 = val_data['x_0']
-    val_label = val_data['real_param']
-
+    val_times, val_x_0, val_label = get_1d_data(
+        n_traj    = 600,
+        L         = 60,
+        device    = device,
+        seed      = 0,
+        )
+    
+    train_nomalized_data = (train_x_0 - train_x_0.mean()) / math.sqrt(train_x_0.var())
+    val_nomalized_data = (val_x_0 - train_x_0.mean()) / math.sqrt(train_x_0.var())
+    
     cls_value = torch.Tensor([0.03, 0.12,
                         0.21, 0.3,
                         0.39, 0.48,
@@ -103,8 +103,8 @@ def main(args):
             optm.zero_grad()
             
             # Get batch
-            idx = np.random.choice(train_x_0.shape[0],batch_size)
-            x_0_batch = train_x_0[idx,:,:] # [B x C x L]
+            idx = np.random.choice(train_nomalized_data.shape[0],batch_size)
+            x_0_batch = train_nomalized_data[idx,:,:] # [B x C x L]
             label = train_label[idx].type(torch.LongTensor).to(device) # [B x C]
             
             # Class prediction
@@ -135,7 +135,6 @@ def main(args):
                     pred = cls_value[pred_idx]
                     label = cls_value[val_label]
                     loss = criterion(output, val_label)
-                    
                     acc = torch.sum(pred == label) / len(val_label) * 100
                     
                     if args.wandb:
@@ -197,3 +196,7 @@ if __name__ =="__main__":
         wandb.init(project='hdm-1d', name=args.name)
     
     main(args)
+    
+    ### Best accuracy command
+    # python -u main.py --name final --train --feature 128 --block 7 --channel '1,2,2,2,4,4,8' --rate '1,1,2,1,2,1,2'
+    ###
