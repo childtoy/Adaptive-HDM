@@ -2,7 +2,33 @@ import math
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+<<<<<<< HEAD
 
+=======
+from abc import abstractmethod
+
+class TimestepBlock(nn.Module):
+    """
+    Any module where forward() takes timestep embeddings as a second argument.
+    """
+
+    @abstractmethod
+    def forward(self, x, emb=None):
+        """
+        Apply the module to `x` given `emb` timestep embeddings.
+        """
+        
+class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
+    """
+    A sequential module that passes timestep embeddings to the children that
+    support it as an extra input.
+    """
+
+    def forward(self, x, emb=None):
+        for layer in self:
+                x = layer(x)
+        return x
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
 
 def zero_module(module):
     """
@@ -259,7 +285,11 @@ class AttentionBlock(nn.Module):
         intermediate_output_dict['out']    = out
         return out,intermediate_output_dict
 
+<<<<<<< HEAD
 class ResBlock(nn.Sequential):
+=======
+class ResBlock(TimestepBlock):
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
     """ 
     A residual block that can optionally change the number of channels and resolution
     
@@ -291,6 +321,10 @@ class ResBlock(nn.Sequential):
         kernel_size          = 3,
         actv                 = nn.SiLU(),
         use_conv             = False,
+<<<<<<< HEAD
+=======
+        use_scale_shift_norm = True,
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
         upsample             = False,
         downsample           = False,
         up_rate              = 2,
@@ -310,6 +344,10 @@ class ResBlock(nn.Sequential):
         self.p_dropout            = p_dropout
         self.actv                 = actv
         self.use_conv             = use_conv
+<<<<<<< HEAD
+=======
+        self.use_scale_shift_norm = use_scale_shift_norm
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
         self.upsample             = upsample
         self.downsample           = downsample
         self.up_rate              = up_rate
@@ -358,6 +396,7 @@ class ResBlock(nn.Sequential):
             self.h_upd = nn.Identity()
             self.x_upd = nn.Identity()
             
+<<<<<<< HEAD
         # Embedding layers
         self.emb_layers = nn.Sequential(
             self.actv,
@@ -366,6 +405,17 @@ class ResBlock(nn.Sequential):
                 out_features = self.n_out_channels,
             ),
         )
+=======
+        # # Embedding layers
+        # self.emb_layers = nn.Sequential(
+        #     self.actv,
+        #     nn.Linear(
+        #         in_features  = self.n_emb_channels,
+        #         out_features = 2*self.n_out_channels if self.use_scale_shift_norm 
+        #             else self.n_out_channels,
+        #     ),
+        # )
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
         
         # Output layers
         self.out_layers = nn.Sequential(
@@ -417,7 +467,11 @@ class ResBlock(nn.Sequential):
                 kernel_size  = 1
             )
         
+<<<<<<< HEAD
     def forward(self,x):
+=======
+    def forward(self,x,emb=None):
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
         """
         :param x: [B x C x ...]
         :param emb: [B x n_emb_channels]
@@ -433,10 +487,28 @@ class ResBlock(nn.Sequential):
             x = self.x_upd(x)
         else:
             h = self.in_layers(x) # [B x C x ...]
+<<<<<<< HEAD
                         
         h = self.out_layers(h) # layernorm -> activation -> dropout -> conv
+=======
+            
+        # Combine input with embedding
+        if self.use_scale_shift_norm:
+            out_norm = self.out_layers[0] # layernorm
+            out_actv_dr_conv = self.out_layers[1:] # activation -> dropout -> conv
+            h = out_norm(h) # * (1.0 + scale)+ shift # [B x C x ...] 
+            h = out_actv_dr_conv(h) # [B x C x ...]
+        else:
+            # emb_out: [B x C x ...]
+            h = h + emb_out + h_bcond
+            h = self.out_layers(h) # layernorm -> activation -> dropout -> conv
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
             
         # Skip connection
         out = h + self.skip_connection(x) # [B x C x ...]
         return out # [B x C x ...]
+<<<<<<< HEAD
     
+=======
+    
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04

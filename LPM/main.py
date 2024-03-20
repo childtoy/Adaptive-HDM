@@ -9,10 +9,16 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+<<<<<<< HEAD
 from LPM.dataset import get_1d_data
 from LPM.model import (
     LengthUNet,
     lengthMLP
+=======
+from dataset import get_1d_data
+from model import (
+    DiffusionUNetLegacy,
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
 )
 from LPM.tcn import TemporalConvNet
 from LPM.resnet import ResNet50
@@ -33,6 +39,7 @@ def main(args):
     CHANNEL = list(map(int, args.channel.split(',')))
     RATE = list(map(int, args.rate.split(',')))
     
+<<<<<<< HEAD
     # model = LengthUNet(
     #     name                 = 'unet',
     #     length               = 32, 
@@ -53,6 +60,30 @@ def main(args):
     #     # updown_rates         = RATE,
     #     device               = device,
     # ) # input:[B x C x L] => output:[B x C x L]
+=======
+    model = DiffusionUNetLegacy(
+        name                 = 'unet',
+        length               = 60, 
+        dims                 = 1,
+        n_in_channels        = 1,
+        n_base_channels      = 128,
+        n_emb_dim            = EMD,
+        n_cond_dim           = 0,
+        n_time_dim           = 0,
+        n_enc_blocks         = BLOCK, # number of encoder blocks
+        n_groups             = 16, # group norm paramter
+        n_heads              = 4, # number of heads in QKV attention
+        actv                 = nn.SiLU(),
+        kernel_size          = 3, # kernel size (3)
+        padding              = 1, # padding size (1)
+        use_attention        = False,
+        skip_connection      = True, # additional skip connection
+        chnnel_multiples     = CHANNEL,
+        updown_rates         = RATE,
+        use_scale_shift_norm = True,
+        device               = device,
+    ) # input:[B x C x L] => output:[B x C x L]
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
         
     print ("Ready.")
     # model = lengthMLP(60, 256, 30)
@@ -65,6 +96,7 @@ def main(args):
     
     
     # Dataset
+<<<<<<< HEAD
     # train_data = np.load('./train_norm.npy', allow_pickle=True)
     # train_data = train_data.item()
     # train_x_0 = train_data['x_0']
@@ -98,6 +130,30 @@ def main(args):
     np.save('./LPM/val_norm.npy', val_data)
 
     cls_value = torch.Tensor((np.linspace(0.033, 2.0, 30)).tolist()).to(device)
+=======
+    train_times, train_x_0, train_label = get_1d_data(
+        n_traj    = 600,
+        L         = 60,
+        device    = device,
+        seed      = 0,
+        )
+
+    val_times, val_x_0, val_label = get_1d_data(
+        n_traj    = 600,
+        L         = 60,
+        device    = device,
+        seed      = 0,
+        )
+    
+    train_nomalized_data = (train_x_0 - train_x_0.mean()) / math.sqrt(train_x_0.var())
+    val_nomalized_data = (val_x_0 - train_x_0.mean()) / math.sqrt(train_x_0.var())
+    
+    cls_value = torch.Tensor([0.03, 0.12,
+                        0.21, 0.3,
+                        0.39, 0.48,
+                        0.57, 0.66,
+                        0.8, 1.0]).to(device)
+>>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
     
     criterion = torch.nn.CrossEntropyLoss()
     
@@ -122,8 +178,8 @@ def main(args):
             optm.zero_grad()
             
             # Get batch
-            idx = np.random.choice(train_x_0.shape[0],batch_size)
-            x_0_batch = train_x_0[idx,:,:] # [B x C x L]
+            idx = np.random.choice(train_nomalized_data.shape[0],batch_size)
+            x_0_batch = train_nomalized_data[idx,:,:] # [B x C x L]
             label = train_label[idx].type(torch.LongTensor).to(device) # [B x C]
             # Class prediction
             output = model(x_0_batch) # [B x C x L]
@@ -153,7 +209,6 @@ def main(args):
                     pred = cls_value[pred_idx]
                     label = cls_value[val_label]
                     loss = criterion(output, val_label)
-                    
                     acc = torch.sum(pred == label) / len(val_label) * 100
                     
                     # if args.wandb:
@@ -215,3 +270,7 @@ if __name__ =="__main__":
     #     wandb.init(project='hdm-1d', name=args.name)
     
     main(args)
+    
+    ### Best accuracy command
+    # python -u main.py --name final --train --feature 128 --block 7 --channel '1,2,2,2,4,4,8' --rate '1,1,2,1,2,1,2'
+    ###
