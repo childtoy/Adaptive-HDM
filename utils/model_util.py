@@ -2,7 +2,7 @@ from model.mdm import MDM
 from diffusion import gaussian_diffusion as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
-from LPM.model import DiffusionUNetLegacy
+from LPM.model import LengthUNet
 def load_model_wo_clip(model, state_dict):
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
     assert len(unexpected_keys) == 0
@@ -13,7 +13,7 @@ def create_model_and_diffusion(args, data):
     model = MDM(**get_model_args(args, data))
     diffusion = create_gaussian_diffusion(args)
     if args.corr_noise :
-        len_model = DiffusionUNetLegacy()
+        len_model = LengthUNet()
     else : 
         len_model = None
     return model, diffusion, len_model

@@ -84,7 +84,7 @@ class LAFAN1Dataset():
         padded_root_norm = np.concatenate([np.expand_dims(root_norm, axis=2), np.zeros([N,self.window-10,1,3])], axis=-1)
         input_data["input_data"] = np.concatenate([input_data["rot_6d"], padded_root], axis=2)
         input_data["input_norm"] = np.concatenate([rot_norm, padded_root_norm], axis=2)
-
+        input_data["input_rnorm"] = np.concatenate([input_data["rot_6d"], padded_root_norm], axis=2)
         # sample = input_data["input_data"]
         # print(sample.shape)
         # # sample = input_data

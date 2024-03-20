@@ -252,7 +252,8 @@ class TrainLoop:
         mean_rot = torch.Tensor(self.dataset.mean_rot).to(self.device)
         std_rot = torch.Tensor([self.dataset.std_rot]).to(self.device)
         root_pos = sample[:,:,-1,:3] * std_root +  mean_root.unsqueeze(0)
-        rot_6d = sample[:,:,:-1,:] * std_rot + mean_rot.unsqueeze(0)
+        # rot_6d = sample[:,:,:-1,:] * std_rot + mean_rot.unsqueeze(0)
+        rot_6d = sample[:,:,:-1,:]
         # print(rot_6d.shape)
         rot_quat = cont6d_to_quat(torch.Tensor(rot_6d).to(self.device))
         # # rot_quat = rot_quat.reshape(-1,60,22,4)

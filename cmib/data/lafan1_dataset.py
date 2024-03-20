@@ -29,7 +29,7 @@ class LAFAN1Dataset(Dataset):
         # rot_6d = self.data["rot_6d"][index].astype(np.float32)        
         # root_p = self.data["root_p"][index].astype(np.float32)
         # padded_root_p = np.concatenate([root_p, np.zeros([3])]).reshape(-1,1,6)
-        input_data = self.data["input_norm"][index].astype(np.float32)
+        input_data = self.data["input_rnorm"][index].astype(np.float32)
         # inp = np.concatenate([rot_6d,padded_root_p], axis=1)        
 
         inp = torch.Tensor(input_data).reshape(60, 1, -1).permute(2,1,0)
