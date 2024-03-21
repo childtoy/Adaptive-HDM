@@ -17,7 +17,7 @@ def k_se(x1, x2, gain=1.0, hyp_len=1.0):
 def main():
     num_data = 60 # number of frames
     fps = 30
-    save_path = '/data/full_data_wo_pred_root.pkl'
+    save_path = '/data/full_data_wo_pred_root_norm0.pkl'
     device = 'cuda'
     
     # load length prediction module 
@@ -58,6 +58,7 @@ def main():
     
     print('Predicting length parameter')
     rot_data = data['input_rnorm'][:,:,:-1,:]
+    rot_data = (rot_data- np.mean(data['rot_6d'], axis=(0,1)))/np.std(data['rot_6d'], axis=(0))
     rot_data = torch.Tensor(rot_data).reshape(-1, 60, 132) # [40,296, 60, 132]
     model.eval()
     pred_array = []
@@ -87,22 +88,22 @@ def main():
     pred_array = torch.from_numpy(np.concatenate(pred_array)).reshape(-1, 22, 6) # [40,296 x 132,] -> [40,296, 22, 6]
     lens_array = torch.cat([pred_array, torch.ones([40296,1,6])*0.03], dim=1) # [40,296, 23, 6]
     
-    print('Calculating Decomposition K')
+    # print('Calculating Decomposition K')
     lens_array = lens_array.detach().cpu().numpy()
-    t_data = np.linspace(start=0.0, stop=(num_data/fps), num=num_data).reshape((-1,1)) 
-    n_sample, num_joint, num_dim = lens_array.shape
-    decom_K = np.zeros(shape=(n_sample, num_joint, num_dim,num_data,num_data)) # [N x J x D x L x L]    
-    for i in tqdm(range(n_sample)):
-        for j in range(num_joint):
-            for k in range(num_dim):
-                hyp_len = lens_array[i,j,k]
-                K = k_se(x1=t_data, x2=t_data, gain=0.1, hyp_len=hyp_len)
-                K = K + 1e-6*np.eye(num_data,num_data)
-                U, V = np.linalg.eigh(K,UPLO='L')
-                decom_K[i,j,k,:,:] = V @ np.diag(np.sqrt(U)) # [L x L]
+    # t_data = np.linspace(start=0.0, stop=(num_data/fps), num=num_data).reshape((-1,1)) 
+    # n_sample, num_joint, num_dim = lens_array.shape
+    # decom_K = np.zeros(shape=(n_sample, num_joint, num_dim,num_data,num_data)) # [N x J x D x L x L]    
+    # for i in tqdm(range(n_sample)):
+    #     for j in range(num_joint):
+    #         for k in range(num_dim):
+    #             hyp_len = lens_array[i,j,k]
+    #             K = k_se(x1=t_data, t_data, gain=0.1, hyp_len=hyp_len)
+    #             K = K + 1e-6*np.eye(num_data,num_data)
+    #             U, V = np.linalg.eigh(K,UPLO='L')
+    #             decom_K[i,j,k,:,:] = V @ np.diag(np.sqrt(U)) # [L x L]
             
     
-    data['decom_K'] = decom_K 
+    # data['decom_K'] = decom_K 
     data['lens_array'] = lens_array
     with open(save_path, 'wb') as f : 
         pkl.dump(data, f)
