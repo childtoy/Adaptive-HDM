@@ -9,7 +9,7 @@ from abc import abstractmethod
 
 class TimestepBlock(nn.Module):
     """
-    Any module where forward() takes timestep embeddings as a second argument.
+    Any module where forward() takes timestep embeddings as a second argument
     """
 
     @abstractmethod
