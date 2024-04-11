@@ -4,8 +4,33 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+from abc import abstractmethod
 
-<<<<<<< HEAD
+
+class TimestepBlock(nn.Module):
+    """
+    Any module where forward() takes timestep embeddings as a second argument.
+    """
+
+    @abstractmethod
+    def forward(self, x, emb):
+        """
+        Apply the module to `x` given `emb` timestep embeddings.
+        """
+        
+class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
+    """
+    A sequential module that passes timestep embeddings to the children that
+    support it as an extra input.
+    """
+
+    def forward(self, x, emb):
+        for layer in self:
+            if isinstance(layer, TimestepBlock):
+                x = layer(x, emb)
+            else:
+                x = layer(x)
+        return x
 
 def zero_module(module):
     """
@@ -81,7 +106,7 @@ class Upsample(nn.Module):
         self.use_conv       = use_conv
         self.dims           = dims
         self.n_out_channels = n_out_channels or n_channels
-        self.padding_mode   = padding_mode;
+        self.padding_mode   = padding_mode
         self.padding        = padding
         
         if use_conv:
@@ -162,7 +187,107 @@ class Downsample(nn.Module):
         assert x.shape[1] == self.n_channels
         return self.op(x)    
 
-class ResBlock(nn.Sequential):
+class QKVAttentionLegacy(nn.Module):
+    """
+    A module which performs QKV attention. Matches legacy QKVAttention + input/ouput heads shaping
+    """
+    def __init__(self, n_heads):
+        super().__init__()
+        self.n_heads = n_heads
+
+    def forward(self, qkv):
+        """
+        Apply QKV attention.
+        (B:#batches, C:channel size, T:#tokens, H:#heads)
+
+        :param qkv: an [B x (3*C) x T] tensor of Qs, Ks, and Vs.
+        :return: an [B x C x T] tensor after attention.
+        """
+        n_batches, width, n_tokens = qkv.shape
+        assert width % (3 * self.n_heads) == 0
+        ch = width // (3 * self.n_heads)
+        q, k, v = qkv.reshape(n_batches * self.n_heads, ch * 3, n_tokens).split(ch, dim=1)
+        scale = 1 / math.sqrt(math.sqrt(ch))
+        weight = th.einsum(
+            "bct,bcs->bts", q * scale, k * scale
+        )  # More stable with f16 than dividing afterwards
+        weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
+        a = th.einsum("bts,bcs->bct", weight, v) # [(H*B) x (C//H) x T]
+        out = a.reshape(n_batches, -1, n_tokens) # [B x C x T]
+        return out
+
+class AttentionBlock(nn.Module):
+    """
+    An attention block that allows spatial positions to attend to each other.
+    Input: [B x C x W x H] tensor
+    Output: [B x C x W x H] tensor
+    """
+    def __init__(
+            self,
+            name               = 'attentionblock',
+            n_channels         = 1,
+            n_heads            = 1,
+            n_groups           = 32,
+    ):
+        super().__init__()
+        self.name               = name
+        self.n_channels         = n_channels
+        self.n_heads            = n_heads
+        assert (
+            n_channels % n_heads == 0
+        ), f"n_channels:[%d] should be divisible by n_heads:[%d]."%(n_channels,n_heads)
+            
+        # Normalize 
+        self.norm = normalization(n_channels=n_channels,n_groups=n_groups)
+        
+        # Tripple the channel
+        self.qkv = nn.Conv1d(
+            in_channels  = self.n_channels,
+            out_channels = self.n_channels*3,
+            kernel_size  = 1
+        )
+        
+        # QKV Attention
+        self.attention = QKVAttentionLegacy(
+            n_heads = self.n_heads
+        )
+        
+        # Projection
+        self.proj_out = zero_module(
+            nn.Conv1d(
+                in_channels  = self.n_channels,
+                out_channels = self.n_channels,
+                kernel_size  = 1
+            )
+        )
+        
+    def forward(self, x):
+        """
+        :param x: [B x C x W x H] tensor
+        :return out: [B x C x W x H] tensor
+        """
+        intermediate_output_dict = {}
+        b, c, *spatial = x.shape
+        # Triple the channel 
+        x_rsh  = x.reshape(b, c, -1)    # [B x C x WH]
+        x_nzd  = self.norm(x_rsh)       # [B x C x WH]
+        qkv    = self.qkv(x_nzd)        # [B x 3C x WH]
+        # QKV attention
+        h_att  = self.attention(qkv)    # [B x C x WH]
+        h_proj = self.proj_out(h_att)   # [B x C x WH]
+        # Residual connection
+        out = (x_rsh + h_proj).reshape(b, c, *spatial) # [B x C x W x H]
+        # Append
+        intermediate_output_dict['x']  = x
+        intermediate_output_dict['x_rsh']  = x_rsh
+        intermediate_output_dict['x_nzd']  = x_nzd
+        intermediate_output_dict['qkv']    = qkv
+        intermediate_output_dict['h_att']  = h_att
+        intermediate_output_dict['h_proj'] = h_proj
+        intermediate_output_dict['out']    = out
+        return out,intermediate_output_dict
+
+class ResBlock(TimestepBlock):
     """ 
     A residual block that can optionally change the number of channels and resolution
     
@@ -194,6 +319,7 @@ class ResBlock(nn.Sequential):
         kernel_size          = 3,
         actv                 = nn.SiLU(),
         use_conv             = False,
+        use_scale_shift_norm = True,
         upsample             = False,
         downsample           = False,
         up_rate              = 2,
@@ -213,6 +339,7 @@ class ResBlock(nn.Sequential):
         self.p_dropout            = p_dropout
         self.actv                 = actv
         self.use_conv             = use_conv
+        self.use_scale_shift_norm = use_scale_shift_norm
         self.upsample             = upsample
         self.downsample           = downsample
         self.up_rate              = up_rate
@@ -262,14 +389,16 @@ class ResBlock(nn.Sequential):
             self.x_upd = nn.Identity()
             
         # Embedding layers
-        self.emb_layers = nn.Sequential(
-            self.actv,
-            nn.Linear(
-                in_features  = self.n_emb_channels,
-                out_features = self.n_out_channels,
-            ),
-        )
-        
+        if n_emb_channels > 0:
+            self.emb_layers = nn.Sequential(
+                self.actv,
+                nn.Linear(
+                    in_features  = self.n_emb_channels,
+                    out_features = 2*self.n_out_channels if self.use_scale_shift_norm 
+                        else self.n_out_channels,
+                ),
+            )
+
         # Output layers
         self.out_layers = nn.Sequential(
             normalization(n_channels=self.n_out_channels,n_groups=self.n_groups),
@@ -320,7 +449,7 @@ class ResBlock(nn.Sequential):
                 kernel_size  = 1
             )
         
-    def forward(self,x):
+    def forward(self,x,emb=None):
         """
         :param x: [B x C x ...]
         :param emb: [B x n_emb_channels]
@@ -336,133 +465,35 @@ class ResBlock(nn.Sequential):
             x = self.x_upd(x)
         else:
             h = self.in_layers(x) # [B x C x ...]
-                        
-        h = self.out_layers(h) # layernorm -> activation -> dropout -> conv
+        
+        # Embedding layer
+        if isinstance(emb, th.Tensor):
+            emb_out = self.emb_layers(emb).type(h.dtype)
+            while len(emb_out.shape) < len(h.shape):
+                emb_out = emb_out[..., None] # match 'emb_out' with 'h': [B x C x ...]
+            
+        # Combine input with embedding
+        if self.use_scale_shift_norm:
+            out_norm = self.out_layers[0] # layernorm
+            out_actv_dr_conv = self.out_layers[1:] # activation -> dropout -> conv
+            # emb_out: [B x 2C x ...]
+            if isinstance(emb, th.Tensor):
+                scale,shift = th.chunk(emb_out, 2, dim=1) # [B x C x ...]
+                h = out_norm(h) * (1.0 + scale)+ shift # [B x C x ...] 
+            else:
+                h = out_norm(h)
+            h = out_actv_dr_conv(h) # [B x C x ...]
+        else:
+            # emb_out: [B x C x ...]
+            h = h + emb_out + h_bcond
+            h = self.out_layers(h) # layernorm -> activation -> dropout -> conv
             
         # Skip connection
         out = h + self.skip_connection(x) # [B x C x ...]
         return out # [B x C x ...]
     
 
-
-def get_named_beta_schedule(
-    schedule_name,
-    num_diffusion_timesteps, 
-    scale_betas=1.0,
-    np_type=np.float64
-    ):
-    """
-    Get a pre-defined beta schedule for the given name.
-
-    The beta schedule library consists of beta schedules which remain similar
-    in the limit of num_diffusion_timesteps.
-    Beta schedules may be added, but should not be removed or changed once
-    they are committed to maintain backwards compatibility.
-    """
-    if schedule_name == "linear":
-        # Linear schedule from Ho et al, extended to work for any number of
-        # diffusion steps.
-        scale = scale_betas * 1000 / num_diffusion_timesteps
-        beta_start = scale * 0.0001
-        beta_end = scale * 0.02
-        return np.linspace(
-            beta_start, beta_end, num_diffusion_timesteps, dtype=np_type
-        )
-    elif schedule_name == "cosine":
-        return betas_for_alpha_bar(
-            num_diffusion_timesteps,
-            lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2,
-        )
-    else:
-        raise NotImplementedError(f"unknown beta schedule: {schedule_name}")
     
-def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
-    """
-    Create a beta schedule that discretizes the given alpha_t_bar function,
-    which defines the cumulative product of (1-beta) over time from t = [0,1].
-
-    :param num_diffusion_timesteps: the number of betas to produce.
-    :param alpha_bar: a lambda that takes an argument t from 0 to 1 and
-                      produces the cumulative product of (1-beta) up to that
-                      part of the diffusion process.
-    :param max_beta: the maximum beta to use; use values lower than 1 to
-                     prevent singularities.
-    """
-    betas = []
-    for i in range(num_diffusion_timesteps):
-        t1 = i / num_diffusion_timesteps
-        t2 = (i + 1) / num_diffusion_timesteps
-        betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
-    return np.array(betas)
-
-def get_ddpm_constants(
-    schedule_name = 'cosine',
-    T             = 1000,
-    np_type       = np.float64
-    ):
-    timesteps = np.linspace(start=1,stop=T,num=T)
-    betas = get_named_beta_schedule(
-        schedule_name           = schedule_name,
-        num_diffusion_timesteps = T,
-        scale_betas             = 1.0,
-    ).astype(np_type) # [1,000]
-    alphas                    = 1.0 - betas 
-    alphas_bar                = np.cumprod(alphas, axis=0) #  cummulative product
-    alphas_bar_prev           = np.append(1.0,alphas_bar[:-1])
-    sqrt_recip_alphas         = np.sqrt(1.0/alphas)
-    sqrt_alphas_bar           = np.sqrt(alphas_bar)
-    sqrt_one_minus_alphas_bar = np.sqrt(1.0-alphas_bar)
-    posterior_variance        = betas*(1.0-alphas_bar_prev)/(1.0-alphas_bar)
-    posterior_variance        = posterior_variance.astype(np_type)
-    
-    # Append
-    dc = {}
-    dc['schedule_name']             = schedule_name
-    dc['T']                         = T
-    dc['timesteps']                 = timesteps
-    dc['betas']                     = betas
-    dc['alphas']                    = alphas
-    dc['alphas_bar']                = alphas_bar
-    dc['alphas_bar_prev']           = alphas_bar_prev
-    dc['sqrt_recip_alphas']         = sqrt_recip_alphas
-    dc['sqrt_alphas_bar']           = sqrt_alphas_bar
-    dc['sqrt_one_minus_alphas_bar'] = sqrt_one_minus_alphas_bar
-    dc['posterior_variance']        = posterior_variance
-    
-    return dc
-
-
-class lengthMLP(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super(lengthMLP, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.bn1 = nn.BatchNorm1d(hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size*2)
-        self.bn2 = nn.BatchNorm1d(hidden_size*2)
-        self.fc3 = nn.Linear(hidden_size*2, hidden_size*2)
-        self.bn3 = nn.BatchNorm1d(hidden_size*2)
-        self.fc4 = nn.Linear(hidden_size*2, hidden_size)
-        self.bn4 = nn.BatchNorm1d(hidden_size)
-        self.fc5 = nn.Linear(hidden_size, output_size)
-
-    def forward(self, x):
-        x = th.relu(self.bn1(self.fc1(x)))
-        x = th.relu(self.bn2(self.fc2(x)))
-        x = th.relu(self.bn3(self.fc3(x)))
-        x = th.relu(self.bn4(self.fc4(x)))
-        x = self.fc5(x)
-        return x
-
-class LengthUNet(nn.Module):
-=======
-from module import (
-    conv_nd,
-    ResBlock,
-    AttentionBlock,
-    TimestepEmbedSequential,
-)
-
-
 def timestep_embedding(timesteps, dim, max_period=10000):
     """
     Create sinusoidal timestep embeddings.
@@ -483,18 +514,17 @@ def timestep_embedding(timesteps, dim, max_period=10000):
         embedding = th.cat([embedding, th.zeros_like(embedding[:, :1])], dim=-1)
     return embedding
 
-class DiffusionUNetLegacy(nn.Module):
->>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
+class LengthPredctionUnet(nn.Module):
     """ 
-    U-Net for Length Prediction Modeuls
+    U-Net for diffusion models (legacy)
     """
     def __init__(
         self,
         name                 = 'unet',
         dims                 = 1, # spatial dimension, if dims==1, [B x C x L], if dims==2, [B x C x W x H]
-        length               = 30, 
+        length               = 196, 
         n_in_channels        = 128, # input channels
-        n_base_channels      = 64, # base channel size
+        n_base_channels      = 128, # base channel size
         n_emb_dim            = 128, # time embedding size
         n_cond_dim           = 0, # conditioning vector size (default is 0 indicating an unconditional model)
         n_time_dim           = 0,
@@ -504,10 +534,7 @@ class DiffusionUNetLegacy(nn.Module):
         actv                 = nn.SiLU(),
         kernel_size          = 3, # kernel size
         padding              = 1,
-<<<<<<< HEAD
-=======
-        use_attention        = True,
->>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
+        use_attention        = False,
         skip_connection      = True, # (optional) additional final skip connection
         use_scale_shift_norm = True, # positional embedding handling
         chnnel_multiples     = (1,2,4),
@@ -517,6 +544,7 @@ class DiffusionUNetLegacy(nn.Module):
         super().__init__()
         self.name                 = name
         self.dims                 = dims
+        self.length               = length
         self.n_in_channels        = n_in_channels
         self.n_base_channels      = n_base_channels
         self.n_emb_dim            = n_emb_dim
@@ -528,14 +556,12 @@ class DiffusionUNetLegacy(nn.Module):
         self.actv                 = actv
         self.kernel_size          = kernel_size
         self.padding              = padding
+        self.use_attention        = use_attention
         self.skip_connection      = skip_connection
         self.use_scale_shift_norm = use_scale_shift_norm
         self.chnnel_multiples     = chnnel_multiples
         self.updown_rates         = updown_rates
         self.device               = device
-<<<<<<< HEAD
-                    
-=======
         
         # Time embedding
         if self.n_time_dim > 0:
@@ -553,7 +579,6 @@ class DiffusionUNetLegacy(nn.Module):
                 nn.Linear(in_features=self.n_emb_dim,out_features=self.n_emb_dim),
             ).to(self.device)
             
->>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
         # Lifting (1x1 conv)
         self.lift = conv_nd(
             dims         = self.dims,
@@ -575,23 +600,55 @@ class DiffusionUNetLegacy(nn.Module):
             n_channels2cat.append(out_channel) # append out_channel
             updown_rate = updown_rates[e_idx]
             
+            if n_cond_dim > 0:
             # Residual block in encoder
-            self.enc_layers.append(
-                ResBlock(
-                    name                 = 'res',
-                    n_channels           = in_channel,
-                    n_emb_channels       = self.n_emb_dim,
-                    n_out_channels       = out_channel,
-                    n_groups             = self.n_groups,
-                    dims                 = self.dims,
-                    p_dropout            = 0.7,
-                    actv                 = self.actv,
-                    kernel_size          = self.kernel_size,
-                    padding              = self.padding,
-                    downsample           = updown_rate != 1,
-                    down_rate            = updown_rate,
-                ).to(device)
-            )
+                self.enc_layers.append(
+                    ResBlock(
+                        name                 = 'res',
+                        n_channels           = in_channel,
+                        n_emb_channels       = self.n_emb_dim,
+                        n_out_channels       = out_channel,
+                        n_groups             = self.n_groups,
+                        dims                 = self.dims,
+                        p_dropout            = 0.7,
+                        actv                 = self.actv,
+                        kernel_size          = self.kernel_size,
+                        padding              = self.padding,
+                        downsample           = updown_rate != 1,
+                        down_rate            = updown_rate,
+                        use_scale_shift_norm = self.use_scale_shift_norm,
+                    ).to(device)
+                )
+            
+            else:
+                self.enc_layers.append(
+                    ResBlock(
+                        name                 = 'res',
+                        n_channels           = in_channel,
+                        n_emb_channels       = self.n_cond_dim,
+                        n_out_channels       = out_channel,
+                        n_groups             = self.n_groups,
+                        dims                 = self.dims,
+                        p_dropout            = 0.7,
+                        actv                 = self.actv,
+                        kernel_size          = self.kernel_size,
+                        padding              = self.padding,
+                        downsample           = updown_rate != 1,
+                        down_rate            = updown_rate,
+                        use_scale_shift_norm = self.use_scale_shift_norm,
+                    ).to(device)
+                )
+                
+            # Attention block in encoder
+            if self.use_attention:
+                self.enc_layers.append(
+                    AttentionBlock(
+                        name           = 'att',
+                        n_channels     = out_channel,
+                        n_heads        = self.n_heads,
+                        n_groups       = self.n_groups,
+                    ).to(device)
+                )
         
         # Mid
         self.mid = conv_nd(
@@ -600,30 +657,20 @@ class DiffusionUNetLegacy(nn.Module):
             out_channels = self.n_base_channels*self.chnnel_multiples[-1],
             kernel_size  = 1,
         ).to(device)
-        
-        if length == 32:
-            input_dim = 4096
-        else:
-            input_dim = 7168 # when frames 60: latent dim (B, 1024, 7) -> flatten (1024*7) = (7168)
-            
+
         # For Classification
         self.proj = nn.Sequential(
             nn.Dropout(0.25),
-<<<<<<< HEAD
-            nn.Linear(in_features=self.n_base_channels*self.chnnel_multiples[-1],
-                      out_features=self.n_base_channels*self.chnnel_multiples[-1]//4),
-=======
-            nn.Linear(in_features=input_dim,out_features=1024),
->>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
+            nn.Linear(in_features=int((self.n_base_channels*self.chnnel_multiples[-1])),
+                      out_features=int((self.n_base_channels*self.chnnel_multiples[-1]))//4),
             nn.GELU(),
-            nn.LayerNorm(self.n_base_channels*self.chnnel_multiples[-1]//4),
-            nn.Dropout(0.25), 
-            nn.Linear(in_features=self.n_base_channels*self.chnnel_multiples[-1]//4
-                      ,out_features=self.n_base_channels*self.chnnel_multiples[-1]//16),
+            nn.LayerNorm(int((self.n_base_channels*self.chnnel_multiples[-1]))//4),
+            nn.Dropout(0.5), 
+            nn.Linear(in_features=int((self.n_base_channels*self.chnnel_multiples[-1]))//4,out_features=int((self.n_base_channels)//4)),
             nn.GELU(),
-            nn.LayerNorm(self.n_base_channels*self.chnnel_multiples[-1]//16),
-            nn.Dropout(0.25), 
-            nn.Linear(in_features=self.n_base_channels*self.chnnel_multiples[-1]//16,out_features=10)
+            nn.LayerNorm(int((self.n_base_channels)//4)),
+            nn.Dropout(0.5), 
+            nn.Linear(in_features=int((self.n_base_channels)//4),out_features=7)
         ).to(self.device)
         
         # Define U-net encoder
@@ -631,25 +678,19 @@ class DiffusionUNetLegacy(nn.Module):
         for l_idx,layer in enumerate(self.enc_layers):
             self.enc_net.add_module(
                 name   = 'enc_%02d'%(l_idx),
-                module = layer
+                module = TimestepEmbedSequential(layer)
             )
         
-    def forward(self,x):
+    def forward(self,x,timesteps=None,c=None):
         """ 
         :param x: [B x n_in_channels x ...]
         :timesteps: [B]
         :return: [B x n_in_channels x ...], same shape as x
         """
-<<<<<<< HEAD
-        # intermediate_output_dict = {}
-        # intermediate_output_dict['x'] = x
-                
-=======
         intermediate_output_dict = {}
         intermediate_output_dict['x'] = x
         
-        emb = th.Tensor(0).to(self.device) 
-        
+        emb = None
         if self.n_time_dim > 0:
         # time embedding        
             emb = self.time_embed(
@@ -658,34 +699,39 @@ class DiffusionUNetLegacy(nn.Module):
             
         # conditional embedding
         if self.n_cond_dim > 0:
-            cond = self.cond_embed(c)
-            emb = emb + cond
+            cond = self.cond_embed(c[:, None])
+            if emb == None:
+                emb = cond
+            else:
+                emb = emb + cond
         
->>>>>>> e20e5aa9570b99e1080fe4a168bb083d5df3ec04
         # Lift input
         hidden = self.lift(x) # [B x n_base_channels x ...]
         if isinstance(hidden,tuple): hidden = hidden[0] # in case of having tuple
-        # intermediate_output_dict['x_lifted'] = hidden
+        intermediate_output_dict['x_lifted'] = hidden
         
         # Encoder
         self.h_enc_list = [hidden] # start with lifted input
         for m_idx,module in enumerate(self.enc_net):
-            hidden = module(hidden)
+            hidden = module(hidden,emb)
             if isinstance(hidden,tuple): hidden = hidden[0] # in case of having tuple
             # Append
-            # module_name = module[0].name
-            # intermediate_output_dict['h_enc_%s_%02d'%(module_name,m_idx)] = hidden
-            self.h_enc_list.append(hidden)
+            module_name = module[0].name
+            intermediate_output_dict['h_enc_%s_%02d'%(module_name,m_idx)] = hidden
+            # Append encoder output
+            if self.use_attention:
+                if (m_idx%2) == 1:
+                    self.h_enc_list.append(hidden)
+            else:
+                self.h_enc_list.append(hidden)
             
         # Mid
-        print(hidden.shape)
         hidden = self.mid(hidden)
-        print(hidden.shape)
         if isinstance(hidden,tuple): hidden = hidden[0] # in case of having tuple
         
         # Projection
-        hidden = th.flatten(hidden, start_dim=1)
-        print(hidden.shape)
+        # hidden = th.flatten(hidden, start_dim=1)
+        hidden = th.max(hidden, dim=2)[0]
         out = self.proj(hidden)
         
         return out
