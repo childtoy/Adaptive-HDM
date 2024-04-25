@@ -7,11 +7,11 @@ import random
 import codecs as cs
 from tqdm import tqdm
 import spacy
-import sys
+
 from torch.utils.data._utils.collate import default_collate
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer
 from data_loaders.humanml.utils.get_opt import get_opt
-from data_loaders.humanml.scripts.motion_process import recover_rot_input
+
 # import spacy
 
 def collate_fn(batch):
@@ -69,7 +69,6 @@ class Text2MotionDataset(data.Dataset):
                                 new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
                                 while new_name in data_dict:
                                     new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
-
                                 data_dict[new_name] = {'motion': n_motion,
                                                        'length': len(n_motion),
                                                        'text':[text_dict]}
@@ -206,9 +205,8 @@ class Text2MotionDataset(data.Dataset):
 
 '''For use of training text motion matching model, and evaluations'''
 class Text2MotionDatasetV2(data.Dataset):
-    def __init__(self, opt, mean, std, split_file, w_vectorizer, rep_263=True):
+    def __init__(self, opt, mean, std, split_file, w_vectorizer):
         self.opt = opt
-        self.rep_263 = rep_263
         self.w_vectorizer = w_vectorizer
         self.max_length = 20
         self.pointer = 0
@@ -255,7 +253,6 @@ class Text2MotionDatasetV2(data.Dataset):
                                 new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
                                 while new_name in data_dict:
                                     new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
-
                                 data_dict[new_name] = {'motion': n_motion,
                                                        'length': len(n_motion),
                                                        'text':[text_dict]}
@@ -264,7 +261,7 @@ class Text2MotionDatasetV2(data.Dataset):
                             except:
                                 print(line_split)
                                 print(line_split[2], line_split[3], f_tag, to_tag, name)
-                                break
+                                # break
 
                 if flag:
                     data_dict[name] = {'motion': motion,
@@ -338,12 +335,11 @@ class Text2MotionDatasetV2(data.Dataset):
 
         "Z Normalization"
         motion = (motion - self.mean) / self.std
+
         if m_length < self.max_motion_length:
             motion = np.concatenate([motion,
                                      np.zeros((self.max_motion_length - m_length, motion.shape[1]))
                                      ], axis=0)
-        if self.rep_263 == False :
-            motion = recover_rot_input(torch.Tensor(motion).unsqueeze(0)).squeeze(0).numpy()
         # print(word_embeddings.shape, motion.shape)
         # print(tokens)
         return word_embeddings, pos_one_hots, caption, sent_len, motion, m_length, '_'.join(tokens)
@@ -399,7 +395,6 @@ class Text2MotionDatasetBaseline(data.Dataset):
                                 new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
                                 while new_name in data_dict:
                                     new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
-
                                 data_dict[new_name] = {'motion': n_motion,
                                                        'length': len(n_motion),
                                                        'text':[text_dict]}
@@ -766,7 +761,7 @@ class HumanML3D(data.Dataset):
             self.t2m_dataset = TextOnlyDataset(self.opt, self.mean, self.std, self.split_file)
         else:
             self.w_vectorizer = WordVectorizer(pjoin(abs_base_path, 'glove'), 'our_vab')
-            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer, True)
+            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
             self.num_actions = 1 # dummy placeholder
 
         assert len(self.t2m_dataset) > 1, 'You loaded an empty dataset, ' \
@@ -779,64 +774,6 @@ class HumanML3D(data.Dataset):
 
     def __len__(self):
         return self.t2m_dataset.__len__()
-    
-class HumanML3D2(data.Dataset):
-    def __init__(self, mode, datapath='./dataset/humanml_opt.txt', split="train", **kwargs):
-        self.mode = mode
-        
-        self.dataset_name = 't2m'
-        self.dataname = 't2m'
-
-        # Configurations of T2M dataset and KIT dataset is almost the same
-        abs_base_path = f''
-        dataset_opt_path = pjoin(abs_base_path, datapath)
-        device = None  # torch.device('cuda:4') # This param is not in use in this context
-        opt = get_opt(dataset_opt_path, device)
-        opt.meta_dir = pjoin(abs_base_path, opt.meta_dir)
-        opt.motion_dir = pjoin(abs_base_path, opt.motion_dir)
-        opt.text_dir = pjoin(abs_base_path, opt.text_dir)
-        opt.model_dir = pjoin(abs_base_path, opt.model_dir)
-        opt.checkpoints_dir = pjoin(abs_base_path, opt.checkpoints_dir)
-        opt.data_root = pjoin(abs_base_path, opt.data_root)
-        opt.save_root = pjoin(abs_base_path, opt.save_root)
-        opt.meta_dir = './dataset'
-        self.opt = opt
-        print('Loading dataset %s ...' % opt.dataset_name)
-
-        if mode == 'gt':
-            # used by T2M models (including evaluators)
-            self.mean = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))
-            self.std = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
-        elif mode in ['train', 'eval', 'text_only']:
-            # used by our models
-            self.mean = np.load(pjoin(opt.data_root, 'Mean.npy'))
-            self.std = np.load(pjoin(opt.data_root, 'Std.npy'))
-
-        if mode == 'eval':
-            # used by T2M models (including evaluators)
-            # this is to translate their norms to ours
-            self.mean_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))
-            self.std_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
-
-        self.split_file = pjoin(opt.data_root, f'{split}.txt')
-        if mode == 'text_only':
-            self.t2m_dataset = TextOnlyDataset(self.opt, self.mean, self.std, self.split_file)
-        else:
-            self.w_vectorizer = WordVectorizer(pjoin(abs_base_path, 'glove'), 'our_vab')
-            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer, False)
-            self.num_actions = 1 # dummy placeholder
-
-        assert len(self.t2m_dataset) > 1, 'You loaded an empty dataset, ' \
-                                          'it is probably because your data dir has only texts and no motions.\n' \
-                                          'To train and evaluate MDM you should get the FULL data as described ' \
-                                          'in the README file.'
-
-    def __getitem__(self, item):
-        return self.t2m_dataset.__getitem__(item)
-
-    def __len__(self):
-        return self.t2m_dataset.__len__()
-
 
 # A wrapper class for t2m original dataset for MDM purposes
 class KIT(HumanML3D):

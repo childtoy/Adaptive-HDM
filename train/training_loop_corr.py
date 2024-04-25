@@ -18,14 +18,9 @@ from diffusion.resample import create_named_schedule_sampler
 from data_loaders.humanml.networks.evaluator_wrapper import EvaluatorMDMWrapper
 from eval import eval_humanml, eval_humanact12_uestc
 from data_loaders.get_data import get_dataset_loader
-
-
-from data_loaders.humanml.utils.plot_script import plot_3d_motion
-import data_loaders.humanml.utils.paramUtil as paramUtil
-
-from data_loaders.humanml.scripts.motion_process import recover_from_ric
-from data_loaders.tensors import collate
-
+from LPM.model import LengthPredctionUnet
+import torch.nn as nn
+import sys
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
@@ -66,10 +61,10 @@ class TrainLoop:
             use_fp16=self.use_fp16,
             fp16_scale_growth=self.fp16_scale_growth,
         )
-
+        self._load_length_module()
         self.save_dir = args.save_dir
         self.overwrite = args.overwrite
-
+        
         self.opt = AdamW(
             self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
         )
@@ -85,24 +80,24 @@ class TrainLoop:
         self.schedule_sampler_type = 'uniform'
         self.schedule_sampler = create_named_schedule_sampler(self.schedule_sampler_type, diffusion)
         self.eval_wrapper, self.eval_data, self.eval_gt_data = None, None, None
-        # if args.dataset in ['kit', 'humanml'] and args.eval_during_training:
-        #     mm_num_samples = 0  # mm is super slow hence we won't run it during training
-        #     mm_num_repeats = 0  # mm is super slow hence we won't run it during training
-        #     gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.eval_batch_size, num_frames=None,
-        #                                     split=args.eval_split,
-        #                                     hml_mode='eval')
+        if args.dataset in ['kit', 'humanml'] and args.eval_during_training:
+            mm_num_samples = 0  # mm is super slow hence we won't run it during training
+            mm_num_repeats = 0  # mm is super slow hence we won't run it during training
+            gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.eval_batch_size, num_frames=None,
+                                            split=args.eval_split,
+                                            hml_mode='eval')
 
-        #     self.eval_gt_data = get_dataset_loader(name=args.dataset, batch_size=args.eval_batch_size, num_frames=None,
-        #                                            split=args.eval_split,
-        #                                            hml_mode='gt')
-        #     self.eval_wrapper = EvaluatorMDMWrapper(args.dataset, dist_util.dev())
-        #     self.eval_data = {
-        #         'test': lambda: eval_humanml.get_mdm_loader(
-        #             model, diffusion, args.eval_batch_size,
-        #             gen_loader, mm_num_samples, mm_num_repeats, gen_loader.dataset.opt.max_motion_length,
-        #             args.eval_num_samples, scale=1.,
-        #         )
-        #     }
+            self.eval_gt_data = get_dataset_loader(name=args.dataset, batch_size=args.eval_batch_size, num_frames=None,
+                                                   split=args.eval_split,
+                                                   hml_mode='gt')
+            self.eval_wrapper = EvaluatorMDMWrapper(args.dataset, dist_util.dev())
+            self.eval_data = {
+                'test': lambda: eval_humanml.get_mdm_loader(
+                    model, diffusion, args.eval_batch_size,
+                    gen_loader, mm_num_samples, mm_num_repeats, gen_loader.dataset.opt.max_motion_length,
+                    args.eval_num_samples, scale=1.,
+                )
+            }
         self.use_ddp = False
         self.ddp_model = self.model
 
@@ -129,6 +124,45 @@ class TrainLoop:
                 opt_checkpoint, map_location=dist_util.dev()
             )
             self.opt.load_state_dict(state_dict)
+    def _load_length_module(self):
+        model_pth = './ckpt_length60_range1.pt'
+        self.length_module = LengthPredctionUnet(
+            name                 = 'unet',
+            length               = 60, 
+            dims                 = 1,
+            n_in_channels        = 1,
+            n_base_channels      = 128,
+            n_emb_dim            = 128,
+            n_cond_dim           = 0,
+            n_time_dim           = 0,
+            n_enc_blocks         = 7, # number of encoder blocks
+            n_groups             = 16, # group norm paramter
+            n_heads              = 4, # number of heads in QKV attention
+            actv                 = nn.SiLU(),
+            kernel_size          = 3, # kernel size (3)
+            padding              = 1, # padding size (1)
+            use_attention        = False,
+            skip_connection      = True, # additional skip connection
+            chnnel_multiples     = [1,2,2,2,4,4,8],
+            updown_rates         = [1,1,2,1,2,1,2],
+            use_scale_shift_norm = True,
+            device               = 'cuda',
+        ) # input:[B x C x L] => output:[B x C x L]
+        self.length_module.load_state_dict(torch.load(model_pth)['model_state_dict'])
+        self.length_module.to(self.args.device)
+        self.length_module.eval()
+        self.cls_value = torch.Tensor([0.03, 0.12,0.21, 0.3,0.57, 0.66,0.8, 1.0]).to(self.device)
+
+    def _predict_length(self, motion):
+        print(motion.shape)
+        # length prediction module input (n_sample x n_joints x n_dims , 1, n_frames)        
+        with torch.no_grad():
+            output = self.length_module(motion)
+        _, pred_idx = torch.max(output.data, 1)
+        output = pred_idx
+        pred = self.cls_value[pred_idx]
+        print('pred', pred.shape)
+        return pred
 
     def run_loop(self):
 
@@ -140,7 +174,9 @@ class TrainLoop:
 
                 motion = motion.to(self.device)
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
-
+                print('motion', motion.shape)
+                print('cond', cond['y'])
+                sys.exit()
                 self.run_step(motion, cond)
                 if self.step % self.log_interval == 0:
                     for k,v in logger.get_current().name2val.items():
@@ -169,109 +205,44 @@ class TrainLoop:
             self.save()
             self.evaluate()
 
-
     def evaluate(self):
         if not self.args.eval_during_training:
             return
         start_eval = time.time()
-        
-        collate_args = [{'inp': torch.zeros(196), 'tokens': None, 'lengths': 196}] * 1
-        texts = ['a man run fast']
-        collate_args = [dict(arg, text=txt) for arg, txt in zip(collate_args, texts)]
-        # collate_args = [{'inp': torch.zeros(60), 'tokens': None, 'lengths': 60}] * 1
-        _, model_kwargs = collate(collate_args)
+        if self.eval_wrapper is not None:
+            print('Running evaluation loop: [Should take about 90 min]')
+            log_file = os.path.join(self.save_dir, f'eval_humanml_{(self.step + self.resume_step):09d}.log')
+            diversity_times = 300
+            mm_num_times = 0  # mm is super slow hence we won't run it during training
+            eval_dict = eval_humanml.evaluation(
+                self.eval_wrapper, self.eval_gt_data, self.eval_data, log_file,
+                replication_times=self.args.eval_rep_times, diversity_times=diversity_times, mm_num_times=mm_num_times, run_mm=False)
+            print(eval_dict)
+            for k, v in eval_dict.items():
+                if k.startswith('R_precision'):
+                    for i in range(len(v)):
+                        self.train_platform.report_scalar(name=f'top{i + 1}_' + k, value=v[i],
+                                                          iteration=self.step + self.resume_step,
+                                                          group_name='Eval')
+                else:
+                    self.train_platform.report_scalar(name=k, value=v, iteration=self.step + self.resume_step,
+                                                      group_name='Eval')
 
-
-        eval_K_params = None
-        eval_len_param = None
-
-        self.model.eval()
-        for i in range(2):
-            all_motions = []
-            all_lengths = []
-            all_text = []
-            sample_fn = self.diffusion.p_sample_loop
-            sample = sample_fn(
-                self.model,
-                # (args.batch_size, model.njoints, model.nfeats, n_frames),  # BUG FIX - this one caused a mismatch between training and inference
-                (1, self.model.njoints, self.model.nfeats, 196),  # BUG FIX
-                None,
-                None,
-                clip_denoised=False,
-                model_kwargs=model_kwargs,
-                skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
-                init_image=None,
-                progress=True,
-                dump_steps=None,
-                noise=None,
-                const_noise=False,
-            )        
-            
-                    # Recover XYZ *positions* from HumanML3D vector representation
-            n_joints = 22 if sample.shape[1] == 263 else 21
-            sample = self.data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
-            sample = recover_from_ric(sample, n_joints)
-            sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1)
-
-            rot2xyz_pose_rep = 'xyz' if  self.model.data_rep in ['xyz', 'hml_vec'] else self.model.data_rep
-            rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(1, 196).bool()
-            sample = self.model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
-                                jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
-                                get_rotations_back=False)
-
-            text_key = 'text' if 'text' in model_kwargs['y'] else 'action_text'
-            all_text += model_kwargs['y'][text_key]
-
-            all_motions.append(sample.cpu().numpy())
-            all_lengths.append(model_kwargs['y']['lengths'].cpu().numpy())
-            all_motions = np.concatenate(all_motions, axis=0)
-            all_motions = all_motions[:1]  # [bs, njoints, 6, seqlen]
-            all_text = all_text[:1]
-            all_lengths = np.concatenate(all_lengths, axis=0)[:1]
-
-            skeleton = paramUtil.t2m_kinematic_chain
-            motion = all_motions[0].transpose(2, 0, 1)
-            if i == 0 :
-                plot_3d_motion(self.save_dir+'/eval_result_fast_'+str(self.step)+'.mp4', skeleton, motion, dataset=self.args.dataset, title='length : 0.3', fps=20)
-            else : 
-                plot_3d_motion(self.save_dir+'/eval_result_slow_'+str(self.step)+'.mp4', skeleton, motion, dataset=self.args.dataset, title='length : 1.0', fps=20)
-        
-        self.model.train()
-        # if self.eval_wrapper is not None:
-        #     print('Running evaluation loop: [Should take about 90 min]')
-        #     log_file = os.path.join(self.save_dir, f'eval_humanml_{(self.step + self.resume_step):09d}.log')
-        #     diversity_times = 300
-        #     mm_num_times = 0  # mm is super slow hence we won't run it during training
-        #     eval_dict = eval_humanml.evaluation(
-        #         self.eval_wrapper, self.eval_gt_data, self.eval_data, log_file,
-        #         replication_times=self.args.eval_rep_times, diversity_times=diversity_times, mm_num_times=mm_num_times, run_mm=False)
-        #     print(eval_dict)
-        #     for k, v in eval_dict.items():
-        #         if k.startswith('R_precision'):
-        #             for i in range(len(v)):
-        #                 self.train_platform.report_scalar(name=f'top{i + 1}_' + k, value=v[i],
-        #                                                   iteration=self.step + self.resume_step,
-        #                                                   group_name='Eval')
-        #         else:
-        #             self.train_platform.report_scalar(name=k, value=v, iteration=self.step + self.resume_step,
-        #                                               group_name='Eval')
-
-        # elif self.dataset in ['humanact12', 'uestc']:
-        #     eval_args = SimpleNamespace(num_seeds=self.args.eval_rep_times, num_samples=self.args.eval_num_samples,
-        #                                 batch_size=self.args.eval_batch_size, device=self.device, guidance_param = 1,
-        #                                 dataset=self.dataset, unconstrained=self.args.unconstrained,
-        #                                 model_path=os.path.join(self.save_dir, self.ckpt_file_name()))
-        #     eval_dict = eval_humanact12_uestc.evaluate(eval_args, model=self.model, diffusion=self.diffusion, data=self.data.dataset)
-        #     print(f'Evaluation results on {self.dataset}: {sorted(eval_dict["feats"].items())}')
-        #     for k, v in eval_dict["feats"].items():
-        #         if 'unconstrained' not in k:
-        #             self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval')
-        #         else:
-        #             self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval Unconstrained')
+        elif self.dataset in ['humanact12', 'uestc']:
+            eval_args = SimpleNamespace(num_seeds=self.args.eval_rep_times, num_samples=self.args.eval_num_samples,
+                                        batch_size=self.args.eval_batch_size, device=self.device, guidance_param = 1,
+                                        dataset=self.dataset, unconstrained=self.args.unconstrained,
+                                        model_path=os.path.join(self.save_dir, self.ckpt_file_name()))
+            eval_dict = eval_humanact12_uestc.evaluate(eval_args, model=self.model, diffusion=self.diffusion, data=self.data.dataset)
+            print(f'Evaluation results on {self.dataset}: {sorted(eval_dict["feats"].items())}')
+            for k, v in eval_dict["feats"].items():
+                if 'unconstrained' not in k:
+                    self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval')
+                else:
+                    self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval Unconstrained')
 
         end_eval = time.time()
         print(f'Evaluation time: {round(end_eval-start_eval)/60}min')
-
 
 
     def run_step(self, batch, cond):
@@ -296,8 +267,6 @@ class TrainLoop:
                 self.ddp_model,
                 micro,  # [bs, ch, image_size, image_size]
                 t,  # [bs](int) sampled timesteps
-                K_params=None,
-                len_param=None,
                 model_kwargs=micro_cond,
                 dataset=self.data.dataset
             )
@@ -318,7 +287,6 @@ class TrainLoop:
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
             self.mp_trainer.backward(loss)
-
 
     def _anneal_lr(self):
         if not self.lr_anneal_steps:

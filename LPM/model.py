@@ -102,7 +102,7 @@ class Upsample(nn.Module):
         self.use_conv       = use_conv
         self.dims           = dims
         self.n_out_channels = n_out_channels or n_channels
-        self.padding_mode   = padding_mode;
+        self.padding_mode   = padding_mode
         self.padding        = padding
         
         if use_conv:
@@ -505,9 +505,9 @@ class LengthPredctionUnet(nn.Module):
         self,
         name                 = 'unet',
         dims                 = 1, # spatial dimension, if dims==1, [B x C x L], if dims==2, [B x C x W x H]
-        length               = 30, 
+        length               = 196, 
         n_in_channels        = 128, # input channels
-        n_base_channels      = 64, # base channel size
+        n_base_channels      = 128, # base channel size
         n_emb_dim            = 128, # time embedding size
         n_cond_dim           = 0, # conditioning vector size (default is 0 indicating an unconditional model)
         n_time_dim           = 0,
@@ -517,7 +517,7 @@ class LengthPredctionUnet(nn.Module):
         actv                 = nn.SiLU(),
         kernel_size          = 3, # kernel size
         padding              = 1,
-        use_attention        = True,
+        use_attention        = False,
         skip_connection      = True, # (optional) additional final skip connection
         use_scale_shift_norm = True, # positional embedding handling
         chnnel_multiples     = (1,2,4),
@@ -583,24 +583,45 @@ class LengthPredctionUnet(nn.Module):
             n_channels2cat.append(out_channel) # append out_channel
             updown_rate = updown_rates[e_idx]
             
+            if n_cond_dim > 0:
             # Residual block in encoder
-            self.enc_layers.append(
-                ResBlock(
-                    name                 = 'res',
-                    n_channels           = in_channel,
-                    n_emb_channels       = self.n_emb_dim,
-                    n_out_channels       = out_channel,
-                    n_groups             = self.n_groups,
-                    dims                 = self.dims,
-                    p_dropout            = 0.7,
-                    actv                 = self.actv,
-                    kernel_size          = self.kernel_size,
-                    padding              = self.padding,
-                    downsample           = updown_rate != 1,
-                    down_rate            = updown_rate,
-                    use_scale_shift_norm = self.use_scale_shift_norm,
-                ).to(device)
-            )
+                self.enc_layers.append(
+                    ResBlock(
+                        name                 = 'res',
+                        n_channels           = in_channel,
+                        n_emb_channels       = self.n_emb_dim,
+                        n_out_channels       = out_channel,
+                        n_groups             = self.n_groups,
+                        dims                 = self.dims,
+                        p_dropout            = 0.7,
+                        actv                 = self.actv,
+                        kernel_size          = self.kernel_size,
+                        padding              = self.padding,
+                        downsample           = updown_rate != 1,
+                        down_rate            = updown_rate,
+                        use_scale_shift_norm = self.use_scale_shift_norm,
+                    ).to(device)
+                )
+            
+            else:
+                self.enc_layers.append(
+                    ResBlock(
+                        name                 = 'res',
+                        n_channels           = in_channel,
+                        n_emb_channels       = self.n_cond_dim,
+                        n_out_channels       = out_channel,
+                        n_groups             = self.n_groups,
+                        dims                 = self.dims,
+                        p_dropout            = 0.7,
+                        actv                 = self.actv,
+                        kernel_size          = self.kernel_size,
+                        padding              = self.padding,
+                        downsample           = updown_rate != 1,
+                        down_rate            = updown_rate,
+                        use_scale_shift_norm = self.use_scale_shift_norm,
+                    ).to(device)
+                )
+                
             # Attention block in encoder
             if self.use_attention:
                 self.enc_layers.append(
@@ -619,25 +640,20 @@ class LengthPredctionUnet(nn.Module):
             out_channels = self.n_base_channels*self.chnnel_multiples[-1],
             kernel_size  = 1,
         ).to(device)
-        
-        if length == 32:
-            input_dim = 4096
-        else:
-            input_dim = 7168 # when frames 60: latent dim (B, 1024, 7) -> flatten (1024*7) = (7168)
-            
+
         # For Classification
         self.proj = nn.Sequential(
             nn.Dropout(0.25),
-            nn.Linear(in_features=int((self.n_base_channels*self.chnnel_multiples[-1])*(self.length//self.chnnel_multiples[-1])),
-                      out_features=int((self.n_base_channels*self.chnnel_multiples[-1]))),
+            nn.Linear(in_features=int((self.n_base_channels*self.chnnel_multiples[-1])),
+                      out_features=int((self.n_base_channels*self.chnnel_multiples[-1]))//4),
             nn.GELU(),
-            nn.LayerNorm(int((self.n_base_channels*self.chnnel_multiples[-1]))),
+            nn.LayerNorm(int((self.n_base_channels*self.chnnel_multiples[-1]))//4),
             nn.Dropout(0.5), 
-            nn.Linear(in_features=int((self.n_base_channels*self.chnnel_multiples[-1])),out_features=int((self.n_base_channels*self.chnnel_multiples[-1])//32)),
+            nn.Linear(in_features=int((self.n_base_channels*self.chnnel_multiples[-1]))//4,out_features=int((self.n_base_channels)//4)),
             nn.GELU(),
-            nn.LayerNorm(int((self.n_base_channels*self.chnnel_multiples[-1])//32)),
+            nn.LayerNorm(int((self.n_base_channels)//4)),
             nn.Dropout(0.5), 
-            nn.Linear(in_features=int((self.n_base_channels*self.chnnel_multiples[-1])//32),out_features=10)
+            nn.Linear(in_features=int((self.n_base_channels)//4),out_features=7)
         ).to(self.device)
         
         # Define U-net encoder
@@ -657,8 +673,7 @@ class LengthPredctionUnet(nn.Module):
         intermediate_output_dict = {}
         intermediate_output_dict['x'] = x
         
-        emb = th.Tensor(0).to(self.device) 
-        
+        emb = None
         if self.n_time_dim > 0:
         # time embedding        
             emb = self.time_embed(
@@ -667,8 +682,11 @@ class LengthPredctionUnet(nn.Module):
             
         # conditional embedding
         if self.n_cond_dim > 0:
-            cond = self.cond_embed(c)
-            emb = emb + cond
+            cond = self.cond_embed(c[:, None])
+            if emb == None:
+                emb = cond
+            else:
+                emb = emb + cond
         
         # Lift input
         hidden = self.lift(x) # [B x n_base_channels x ...]
@@ -678,7 +696,7 @@ class LengthPredctionUnet(nn.Module):
         # Encoder
         self.h_enc_list = [hidden] # start with lifted input
         for m_idx,module in enumerate(self.enc_net):
-            hidden = module(hidden)
+            hidden = module(hidden,emb)
             if isinstance(hidden,tuple): hidden = hidden[0] # in case of having tuple
             # Append
             module_name = module[0].name
@@ -695,7 +713,8 @@ class LengthPredctionUnet(nn.Module):
         if isinstance(hidden,tuple): hidden = hidden[0] # in case of having tuple
         
         # Projection
-        hidden = th.flatten(hidden, start_dim=1)
+        # hidden = th.flatten(hidden, start_dim=1)
+        hidden = th.max(hidden, dim=2)[0]
         out = self.proj(hidden)
         
         return out

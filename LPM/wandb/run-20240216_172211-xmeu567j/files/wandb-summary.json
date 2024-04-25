@@ -1,1 +1,0 @@
-{"Train loss (Cross Entropy)": 2.726189613342285, "_timestamp": 1708078183.1540842, "_runtime": 6451.162559270859, "_step": 123001, "Val loss (Cross Entropy)": 2.9918129444122314, "Accuracy": 13.966666221618652, "_wandb": {"runtime": 6450}}

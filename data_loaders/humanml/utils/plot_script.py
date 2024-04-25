@@ -58,13 +58,11 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, dataset, figsize=(3
     # preparation related to specific datasets
     if dataset == 'kit':
         data *= 0.003  # scale for visualization
-    elif dataset in ['humanml','humanml2'] :
+    elif dataset == 'humanml':
         data *= 1.3  # scale for visualization
     elif dataset in ['humanact12', 'uestc']:
         data *= -1.5 # reverse axes, scale for visualization
 
-    elif dataset == 'LAFAN':
-        data *= 0.01
     fig = plt.figure(figsize=figsize)
     plt.tight_layout()
     ax = p3.Axes3D(fig)
@@ -129,6 +127,7 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, dataset, figsize=(3
     # writer = FFMpegFileWriter(fps=fps)
     # ani.save(save_path, fps=fps)
     # ani = FuncAnimation(fig, update, frames=frame_number, interval=1000 / fps, repeat=False, init_func=init)
-    ani.save(save_path, writer='pillow', fps=1000 / fps)
+    # ani.save(save_path, writer='pillow', fps=1000 / fps)
+    ani.save(save_path, fps=fps, writer='imagemagick')
 
     plt.close()
