@@ -135,11 +135,11 @@ def add_training_options(parser):
                        help="If -1, will use all samples in the specified split.")
     group.add_argument("--log_interval", default=5_000, type=int,
                        help="Log losses each N steps")
-    group.add_argument("--save_interval", default=10_000, type=int,
+    group.add_argument("--save_interval", default=50_000, type=int,
                        help="Save checkpoints and run evaluation each N steps")
-    group.add_argument("--num_steps", default=1000_000, type=int,
+    group.add_argument("--num_steps", default=600_000, type=int,
                        help="Training will stop after the specified number of steps.")
-    group.add_argument("--num_frames", default=196, type=int,
+    group.add_argument("--num_frames", default=60, type=int,
                        help="Limit for the maximal number of frames. In HumanML3D and KIT this field is ignored.")
     group.add_argument("--resume_checkpoint", default="", type=str,
                        help="If not empty, will start from the specified checkpoint (path to model###.pt file).")
@@ -167,7 +167,7 @@ def add_generate_options(parser):
                     help="Path to GP parameter bag.")
     group.add_argument("--len_idx", default=0, type=int,
                     help="Choose the index of length parameters.")
-    group.add_argument("--motion_length", default=9.8, type=float,
+    group.add_argument("--motion_length", default=2, type=float,
                        help="The length of the sampled motion [in seconds]. "
                             "Maximum is 9.8 for HumanML3D (text-to-motion), and 2.0 for HumanAct12 (action-to-motion)")
     group.add_argument("--input_text", default='', type=str,

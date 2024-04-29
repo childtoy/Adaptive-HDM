@@ -230,7 +230,7 @@ class GaussianDiffusion:
         )
         return mean, variance, log_variance
 
-    def q_sample(self, x_start, t, K_params=None, noise=None):
+    def q_sample(self, x_start, t, noise=None):
         """
         Diffuse the dataset for a given number of diffusion steps.
 
@@ -247,8 +247,7 @@ class GaussianDiffusion:
         return (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
             + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
-            * noise 
-            # * th.rand(1).to(noise.device)*2
+            * noise
         )
 
     def q_posterior_mean_variance(self, x_start, x_t, t):
@@ -276,7 +275,7 @@ class GaussianDiffusion:
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(
-        self, model, x, t, len_param, clip_denoised=True, denoised_fn=None, model_kwargs=None
+        self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None
     ):
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
@@ -303,8 +302,8 @@ class GaussianDiffusion:
 
         B, C = x.shape[:2]
         assert t.shape == (B,)
-        model_output = model(x, self._scale_timesteps(t), len_param, **model_kwargs)
-        
+        model_output = model(x, self._scale_timesteps(t), **model_kwargs)
+
         if 'inpainting_mask' in model_kwargs['y'].keys() and 'inpainted_motion' in model_kwargs['y'].keys():
             inpainting_mask, inpainted_motion = model_kwargs['y']['inpainting_mask'], model_kwargs['y']['inpainted_motion']
             assert self.model_mean_type == ModelMeanType.START_X, 'This feature supports only X_start pred for mow!'
@@ -499,8 +498,6 @@ class GaussianDiffusion:
         model,
         x,
         t,
-        K_params,
-        len_param,
         clip_denoised=True,
         denoised_fn=None,
         cond_fn=None,
@@ -528,20 +525,11 @@ class GaussianDiffusion:
             model,
             x,
             t,
-            len_param,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
         )
         noise = th.randn_like(x)
-
-        if K_params is not None : 
-            noise_expand = noise.squeeze(2).unsqueeze(-1)
-            K_chols = th.Tensor(K_params).to(x.device)
-            K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)) # [B x D x L x L]
-            noise = K_chols_torch_tile @ noise_expand.to(x.device) # [B x D x L x 1]
-            noise = noise.squeeze(dim=3) # [B x D x L]
-            noise = noise.unsqueeze(2)
         # print('const_noise', const_noise)
         if const_noise:
             noise = noise[[0]].repeat(x.shape[0], 1, 1, 1)
@@ -556,8 +544,7 @@ class GaussianDiffusion:
         # print('mean', out["mean"].shape, out["mean"])
         # print('log_variance', out["log_variance"].shape, out["log_variance"])
         # print('nonzero_mask', nonzero_mask.shape, nonzero_mask)
-        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise 
-        # * th.rand(1).to(noise.device)*0.1
+        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def p_sample_with_grad(
@@ -565,7 +552,6 @@ class GaussianDiffusion:
         model,
         x,
         t,
-        K_params,
         clip_denoised=True,
         denoised_fn=None,
         cond_fn=None,
@@ -594,7 +580,6 @@ class GaussianDiffusion:
                 model,
                 x,
                 t,
-                K_params,
                 clip_denoised=clip_denoised,
                 denoised_fn=denoised_fn,
                 model_kwargs=model_kwargs,
@@ -614,8 +599,6 @@ class GaussianDiffusion:
         self,
         model,
         shape,
-        K_params,
-        len_param,
         noise=None,
         clip_denoised=True,
         denoised_fn=None,
@@ -657,8 +640,6 @@ class GaussianDiffusion:
         for i, sample in enumerate(self.p_sample_loop_progressive(
             model,
             shape,
-            K_params=K_params,
-            len_param=len_param,
             noise=noise,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
@@ -683,8 +664,6 @@ class GaussianDiffusion:
         self,
         model,
         shape,
-        K_params,
-        len_param,
         noise=None,
         clip_denoised=True,
         denoised_fn=None,
@@ -713,14 +692,6 @@ class GaussianDiffusion:
             img = noise
         else:
             img = th.randn(*shape, device=device)
-            if K_params is not None : 
-                img_expand = img.squeeze(2).unsqueeze(-1)
-                K_chols = th.Tensor(K_params).to(device)
-                K_chols_torch_tile = th.tile(input=K_chols,dims=(shape[0],1,1,1)) # [B x D x L x L]
-                img = K_chols_torch_tile @ img_expand.to(device) # [B x D x L x 1]
-                img = img.squeeze(dim=3) # [B x D x L]
-                img = img.unsqueeze(2)
-
 
         if skip_timesteps and init_image is None:
             init_image = th.zeros_like(img)
@@ -749,8 +720,6 @@ class GaussianDiffusion:
                     model,
                     img,
                     t,
-                    K_params,
-                    len_param,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     cond_fn=cond_fn,
@@ -765,7 +734,6 @@ class GaussianDiffusion:
         model,
         x,
         t,
-        K_params,
         clip_denoised=True,
         denoised_fn=None,
         cond_fn=None,
@@ -781,7 +749,6 @@ class GaussianDiffusion:
             model,
             x,
             t,
-            K_params,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
@@ -836,7 +803,6 @@ class GaussianDiffusion:
                 model,
                 x,
                 t,
-                K_params,
                 clip_denoised=clip_denoised,
                 denoised_fn=denoised_fn,
                 model_kwargs=model_kwargs,
@@ -877,7 +843,6 @@ class GaussianDiffusion:
         model,
         x,
         t,
-        K_params,
         clip_denoised=True,
         denoised_fn=None,
         model_kwargs=None,
@@ -891,7 +856,6 @@ class GaussianDiffusion:
             model,
             x,
             t,
-            K_params,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
@@ -965,7 +929,6 @@ class GaussianDiffusion:
         self,
         model,
         shape,
-        K_params=None,
         noise=None,
         clip_denoised=True,
         denoised_fn=None,
@@ -1020,7 +983,6 @@ class GaussianDiffusion:
                     model,
                     img,
                     t,
-                    K_params,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     cond_fn=cond_fn,
@@ -1035,7 +997,6 @@ class GaussianDiffusion:
         model,
         x,
         t,
-        K_params,
         clip_denoised=True,
         denoised_fn=None,
         cond_fn=None,
@@ -1052,14 +1013,13 @@ class GaussianDiffusion:
         if not int(order) or not 1 <= order <= 4:
             raise ValueError('order is invalid (should be int from 1-4).')
 
-        def get_model_output(x, t, K_params):
+        def get_model_output(x, t):
             with th.set_grad_enabled(cond_fn_with_grad and cond_fn is not None):
                 x = x.detach().requires_grad_() if cond_fn_with_grad else x
                 out_orig = self.p_mean_variance(
                     model,
                     x,
                     t,
-                    K_params,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
@@ -1080,7 +1040,7 @@ class GaussianDiffusion:
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
         alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
-        eps, out, out_orig = get_model_output(x, t, K_params)
+        eps, out, out_orig = get_model_output(x, t)
 
         if order > 1 and old_out is None:
             # Pseudo Improved Euler
@@ -1120,7 +1080,6 @@ class GaussianDiffusion:
         self,
         model,
         shape,
-        K_params=None,
         noise=None,
         clip_denoised=True,
         denoised_fn=None,
@@ -1143,7 +1102,6 @@ class GaussianDiffusion:
         for sample in self.plms_sample_loop_progressive(
             model,
             shape,
-            K_params,
             noise=noise,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
@@ -1164,7 +1122,6 @@ class GaussianDiffusion:
         self,
         model,
         shape,
-        K_params=None,
         noise=None,
         clip_denoised=True,
         denoised_fn=None,
@@ -1220,7 +1177,6 @@ class GaussianDiffusion:
                     model,
                     img,
                     t,
-                    K_params,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     cond_fn=cond_fn,
@@ -1234,7 +1190,7 @@ class GaussianDiffusion:
                 img = out["sample"]
 
     def _vb_terms_bpd(
-        self, model, x_start, x_t, t, K_params, clip_denoised=True, model_kwargs=None
+        self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None
     ):
         """
         Get a term for the variational lower-bound.
@@ -1250,7 +1206,7 @@ class GaussianDiffusion:
             x_start=x_start, x_t=x_t, t=t
         )
         out = self.p_mean_variance(
-            model, x_t, t, K_params, clip_denoised=clip_denoised, model_kwargs=model_kwargs
+            model, x_t, t, clip_denoised=clip_denoised, model_kwargs=model_kwargs
         )
         kl = normal_kl(
             true_mean, true_log_variance_clipped, out["mean"], out["log_variance"]
@@ -1268,7 +1224,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, K_params=None, len_param=None, model_kwargs=None, noise=None, dataset=None):
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, dataset=None):
         """
         Compute training losses for a single timestep.
 
@@ -1295,17 +1251,6 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-        if K_params is not None : 
-            noise_expand = noise.squeeze(2).unsqueeze(-1)
-            K_chols = th.Tensor(K_params).to(x_start.device)
-            K_chols_torch_tile = K_chols
-            #debug adjust only root position 
-            # K_chols_torch_tile[:,:-6,:,:] = 1e-5
-            # K_chols_torch_tile[:,-3:,:,:] = 1e-5 
-            #debug end            
-            noise = K_chols_torch_tile @ noise_expand.to(x_start.device) # [B x D x L x 1]
-            noise = noise.squeeze(dim=3) # [B x D x L]
-            noise = noise.unsqueeze(2)
         x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
@@ -1316,14 +1261,13 @@ class GaussianDiffusion:
                 x_start=x_start,
                 x_t=x_t,
                 t=t,
-                K_params=K_params,
                 clip_denoised=False,
                 model_kwargs=model_kwargs,
             )["output"]
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), len_param, **model_kwargs)
+            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,
@@ -1340,7 +1284,6 @@ class GaussianDiffusion:
                     x_start=x_start,
                     x_t=x_t,
                     t=t,
-                    K_params=K_params,
                     clip_denoised=False,
                 )["output"]
                 if self.loss_type == LossType.RESCALED_MSE:
@@ -1356,6 +1299,7 @@ class GaussianDiffusion:
                 ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
+
             terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
             target_xyz, model_output_xyz = None, None
@@ -1590,7 +1534,7 @@ class GaussianDiffusion:
         )
         return mean_flat(kl_prior) / np.log(2.0)
 
-    def calc_bpd_loop(self, model, x_start, K_params, clip_denoised=True, model_kwargs=None):
+    def calc_bpd_loop(self, model, x_start, clip_denoised=True, model_kwargs=None):
         """
         Compute the entire variational lower-bound, measured in bits-per-dim,
         as well as other related quantities.
@@ -1625,7 +1569,6 @@ class GaussianDiffusion:
                     x_start=x_start,
                     x_t=x_t,
                     t=t_batch,
-                    K_params=K_params,
                     clip_denoised=clip_denoised,
                     model_kwargs=model_kwargs,
                 )

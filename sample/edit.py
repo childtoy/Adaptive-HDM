@@ -8,7 +8,7 @@ import os
 import numpy as np
 import torch
 from utils.parser_util import edit_args
-from utils.model_util import create_model_and_diffusion, load_model_wo_clip
+from workspace.childtoy.MotionGPDiffusion.utils.model_util_base import create_model_and_diffusion, load_model_wo_clip
 from utils import dist_util
 from model.cfg_sampler import ClassifierFreeSampleModel
 from data_loaders.get_data import get_dataset_loader

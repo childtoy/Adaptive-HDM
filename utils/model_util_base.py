@@ -1,5 +1,5 @@
-from model.mdm import MDM
-from diffusion import gaussian_diffusion as gd
+from model.mdm_base import MDM
+from diffusion import gaussian_diffusion_base as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
 
@@ -49,7 +49,7 @@ def get_model_args(args, data):
 
     # SMPL defaults
     data_rep = 'rot6d'
-    njoints = 25
+    njoints = 23
     nfeats = 6
 
     if args.dataset == 'humanml':
@@ -79,9 +79,10 @@ def get_model_args(args, data):
 
 def create_gaussian_diffusion(args):
     # default params
-    # predict_xstart = args.pred_xstart  # we always predict x_start (a.k.a. x0), that's our deal!
-    predict_xstart = True
-    steps = args.diffusion_steps
+    predict_xstart = args.pred_xstart  # we always predict x_start (a.k.a. x0), that's our deal!
+    # predict_xstart = True
+    # predict_xstart = False  # we always predict x_start (a.k.a. x0), that's our deal!
+    steps = 1000
     scale_beta = 1.  # no scaling
     timestep_respacing = ''  # can be used for ddim sampling, we don't use it.
     learn_sigma = False

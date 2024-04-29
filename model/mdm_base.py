@@ -5,12 +5,13 @@ import torch.nn.functional as F
 import clip
 from model.rotation2xyz import Rotation2xyz
 
-        
+
+
 class MDM(nn.Module):
     def __init__(self, modeltype, njoints, nfeats, num_actions, translation, pose_rep, glob, glob_rot,
                  latent_dim=256, ff_size=1024, num_layers=8, num_heads=4, dropout=0.1,
                  ablation=None, activation="gelu", legacy=False, data_rep='rot6d', dataset='amass', clip_dim=512,
-                 arch='trans_enc', emb_trans_dec=False, clip_version=None, len_token=False, **kargs):
+                 arch='trans_enc', emb_trans_dec=False, clip_version=None, **kargs):
         super().__init__()
 
         self.legacy = legacy
@@ -20,7 +21,7 @@ class MDM(nn.Module):
         self.num_actions = num_actions
         self.data_rep = data_rep
         self.dataset = dataset
-        self.len_token = len_token
+
         self.pose_rep = pose_rep
         self.glob = glob
         self.glob_rot = glob_rot
@@ -37,7 +38,7 @@ class MDM(nn.Module):
         self.activation = activation
         self.clip_dim = clip_dim
         self.action_emb = kargs.get('action_emb', None)
-        
+
         self.input_feats = self.njoints * self.nfeats
 
         self.normalize_output = kargs.get('normalize_encoder_output', False)
@@ -88,12 +89,7 @@ class MDM(nn.Module):
             if 'action' in self.cond_mode:
                 self.embed_action = EmbedAction(self.num_actions, self.latent_dim)
                 print('EMBED ACTION')
-        self.len_embedding = nn.Sequential(
-                nn.Linear(in_features=self.njoints, out_features=self.latent_dim),
-                nn.SiLU(),
-                nn.Linear(in_features=self.latent_dim, out_features=self.latent_dim),
-            )
-        
+
         self.output_process = OutputProcess(self.data_rep, self.input_feats, self.latent_dim, self.njoints,
                                             self.nfeats)
 
@@ -142,17 +138,14 @@ class MDM(nn.Module):
             texts = clip.tokenize(raw_text, truncate=True).to(device) # [bs, context_length] # if n_tokens > 77 -> will truncate
         return self.clip_model.encode_text(texts).float()
 
-    def forward(self, x, timesteps, len_param=None, y=None):
+    def forward(self, x, timesteps, y=None):
         """
         x: [batch_size, njoints, nfeats, max_frames], denoted x_t in the paper
         timesteps: [batch_size] (int)
         """
-        len_emb = None 
-        
         bs, njoints, nfeats, nframes = x.shape
         emb = self.embed_timestep(timesteps)  # [1, bs, d]
-        if len_param is not None : 
-            len_emb = self.len_embedding(len_param)
+
         force_mask = y.get('uncond', False)
         if 'text' in self.cond_mode:
             enc_text = self.encode_text(y['text'])
@@ -167,29 +160,14 @@ class MDM(nn.Module):
             emb_gru = emb_gru.permute(1, 2, 0)      #[bs, d, #frames]
             emb_gru = emb_gru.reshape(bs, self.latent_dim, 1, nframes)  #[bs, d, 1, #frames]
             x = torch.cat((x_reshaped, emb_gru), axis=1)  #[bs, d+joints*feat, 1, #frames]
+
         x = self.input_process(x)
 
         if self.arch == 'trans_enc':
             # adding the timestep embed
-            if self.len_token : 
-                if len_emb is not None : 
-                    xseq = torch.cat((emb, len_emb, x), axis=0)
-                    xseq = self.sequence_pos_encoder(xseq)  # [seqlen+2, bs, d]
-                    output = self.seqTransEncoder(xseq)[2:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
-                else : 
-                    xseq = torch.cat((emb, x), axis=0)
-                    xseq = self.sequence_pos_encoder(xseq)  # [seqlen+2, bs, d]
-                    output = self.seqTransEncoder(xseq)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
-            else :         
-                if len_emb is not None :     
-                    emb += len_emb 
-                    xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
-                    xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
-                    output = self.seqTransEncoder(xseq)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
-                else : 
-                    xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
-                    xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
-                    output = self.seqTransEncoder(xseq)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
+            xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
+            xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
+            output = self.seqTransEncoder(xseq)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
 
         elif self.arch == 'trans_dec':
             if self.emb_trans_dec:
