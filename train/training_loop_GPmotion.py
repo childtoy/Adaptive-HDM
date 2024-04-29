@@ -5,6 +5,7 @@ import time
 from types import SimpleNamespace
 import numpy as np
 import random
+import wandb
 import pickle as pkl
 import blobfile as bf
 import torch
@@ -146,7 +147,7 @@ class TrainLoop:
 
     def _load_length_module(self):
         
-        model_pth = './ckpt_length60_range1.pt'
+        model_pth = './ckpt_length196.pt'
         length_module = LengthPredctionUnet(
             name                 = 'unet',
             length               = 60, 
@@ -154,7 +155,7 @@ class TrainLoop:
             n_in_channels        = 1,
             n_base_channels      = 128,
             n_emb_dim            = 128,
-            n_cond_dim           = 0,
+            n_cond_dim           = 1,
             n_time_dim           = 0,
             n_enc_blocks         = 7, # number of encoder blocks
             n_groups             = 16, # group norm paramter
@@ -172,16 +173,21 @@ class TrainLoop:
         length_module.load_state_dict(torch.load(model_pth)['model_state_dict'])
         length_module.to(self.device)
         length_module.eval()
-        self.cls_value = torch.Tensor([0.03, 0.12,   
-                        0.21, 0.3,
-                        0.39, 0.48,
-                        0.57, 0.66,
-                        0.8, 1.0])
+        self.cls_value = torch.Tensor(
+            [0.033     , 0.14044444, 
+             0.24788889, 0.35533333, 
+             0.46277778, 0.67766667, 
+             1.        ]).to(self.device)
         return length_module
-    def _predict_length(self, motion):
-        # length prediction module input (n_sample x n_joints x n_dims , 1, n_frames)        
+    def _predict_length(self, motion, true_length=None):
+        """
+        :param motion: [B x n_joints x n_dims, 1, n_frames]
+        :param true_length: [B x n_joints x n_dims,]
+        """
         with torch.no_grad():
-            output = self.length_module(motion)
+            if true_length is not None:
+                true_length = true_length.float()
+            output = self.length_module(motion, c=true_length)
         _, pred_idx = torch.max(output.data, 1)
         # output = pred_idx
         # pred = None
@@ -212,6 +218,9 @@ class TrainLoop:
         return pred_K_params
         
     def run_loop(self):
+        if self.args.wandb:
+            wandb.init(project=self.args.project, name=self.args.save_dir)
+            
         for epoch in range(self.num_epochs):
             print(f'Starting epoch {epoch}')
             for motion, cond in tqdm(self.data):
@@ -225,12 +234,13 @@ class TrainLoop:
                     B, D, _, L = motion.shape
                     # input_motion = motion[:,:,:,:60]
                     slices = [[0, 4], [193, 196]]
-                    input_motion = motion[:,np.concatenate([np.arange(*i) for i in slices]),:,:60]
+                    input_motion = motion[:,np.concatenate([np.arange(*i) for i in slices]),:,:]
                     B_, D_, _, L_ = input_motion.shape
                     input_motion = input_motion.reshape(B_*D_, 1, L_)
-                    pred_lens, pred_idx = self._predict_length(input_motion)
+                    true_length = cond['y']['lengths'].repeat_interleave(D_)
+                    pred_lens, pred_idx = self._predict_length(input_motion, true_length)
                     pred_lens = pred_lens.reshape(B_, D_)
-                    org_lens = np.ones([B,D])*0.03
+                    org_lens = np.ones([B,D])*0.033
                     org_lens[:,np.concatenate([np.arange(*i) for i in slices])] = pred_lens
                     # org_lens = pred_lens
                     self.pred_lens = torch.Tensor(org_lens).to(self.device)
@@ -247,7 +257,8 @@ class TrainLoop:
                     for k,v in logger.get_current().dumpkvs().items():
                         if k == 'loss':
                             print('step[{}]: loss[{:0.5f}]'.format(self.step+self.resume_step, v))
-
+                            if self.args.wandb:
+                                wandb.log({'Train loss':v}, step=self.step+self.resume_step)
                         if k in ['step', 'samples'] or '_q' in k:
                             continue
                         else:

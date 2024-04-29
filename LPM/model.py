@@ -6,13 +6,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from abc import abstractmethod
 
+
 class TimestepBlock(nn.Module):
     """
     Any module where forward() takes timestep embeddings as a second argument.
     """
 
     @abstractmethod
-    def forward(self, x, emb=None):
+    def forward(self, x, emb):
         """
         Apply the module to `x` given `emb` timestep embeddings.
         """
@@ -23,8 +24,11 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb=None):
+    def forward(self, x, emb):
         for layer in self:
+            if isinstance(layer, TimestepBlock):
+                x = layer(x, emb)
+            else:
                 x = layer(x)
         return x
 
@@ -384,16 +388,17 @@ class ResBlock(TimestepBlock):
             self.h_upd = nn.Identity()
             self.x_upd = nn.Identity()
             
-        # # Embedding layers
-        # self.emb_layers = nn.Sequential(
-        #     self.actv,
-        #     nn.Linear(
-        #         in_features  = self.n_emb_channels,
-        #         out_features = 2*self.n_out_channels if self.use_scale_shift_norm 
-        #             else self.n_out_channels,
-        #     ),
-        # )
-        
+        # Embedding layers
+        if n_emb_channels > 0:
+            self.emb_layers = nn.Sequential(
+                self.actv,
+                nn.Linear(
+                    in_features  = self.n_emb_channels,
+                    out_features = 2*self.n_out_channels if self.use_scale_shift_norm 
+                        else self.n_out_channels,
+                ),
+            )
+
         # Output layers
         self.out_layers = nn.Sequential(
             normalization(n_channels=self.n_out_channels,n_groups=self.n_groups),
@@ -460,12 +465,23 @@ class ResBlock(TimestepBlock):
             x = self.x_upd(x)
         else:
             h = self.in_layers(x) # [B x C x ...]
+        
+        # Embedding layer
+        if isinstance(emb, th.Tensor):
+            emb_out = self.emb_layers(emb).type(h.dtype)
+            while len(emb_out.shape) < len(h.shape):
+                emb_out = emb_out[..., None] # match 'emb_out' with 'h': [B x C x ...]
             
         # Combine input with embedding
         if self.use_scale_shift_norm:
             out_norm = self.out_layers[0] # layernorm
             out_actv_dr_conv = self.out_layers[1:] # activation -> dropout -> conv
-            h = out_norm(h) # * (1.0 + scale)+ shift # [B x C x ...] 
+            # emb_out: [B x 2C x ...]
+            if isinstance(emb, th.Tensor):
+                scale,shift = th.chunk(emb_out, 2, dim=1) # [B x C x ...]
+                h = out_norm(h) * (1.0 + scale)+ shift # [B x C x ...] 
+            else:
+                h = out_norm(h)
             h = out_actv_dr_conv(h) # [B x C x ...]
         else:
             # emb_out: [B x C x ...]
@@ -476,6 +492,7 @@ class ResBlock(TimestepBlock):
         out = h + self.skip_connection(x) # [B x C x ...]
         return out # [B x C x ...]
     
+
     
 def timestep_embedding(timesteps, dim, max_period=10000):
     """
@@ -666,8 +683,9 @@ class LengthPredctionUnet(nn.Module):
         
     def forward(self,x,timesteps=None,c=None):
         """ 
-        :param x: [B x n_in_channels x ...]
-        :timesteps: [B]
+        :param x: [B x n_in_channels x length]
+        :param timesteps: [B]
+        :param c: [B]
         :return: [B x n_in_channels x ...], same shape as x
         """
         intermediate_output_dict = {}

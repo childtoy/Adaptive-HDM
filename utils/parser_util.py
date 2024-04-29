@@ -143,8 +143,11 @@ def add_training_options(parser):
                        help="Limit for the maximal number of frames. In HumanML3D and KIT this field is ignored.")
     group.add_argument("--resume_checkpoint", default="", type=str,
                        help="If not empty, will start from the specified checkpoint (path to model###.pt file).")
-
-
+    group.add_argument("--wandb", action='store_true',
+                       help="whether logging using wandb")
+    group.add_argument("--project", default='GP-train', type=str,
+                       help="logging wandb")
+    
 def add_sampling_options(parser):
     group = parser.add_argument_group('sampling')
     group.add_argument("--model_path", required=True, type=str,
