@@ -38,18 +38,7 @@ def main():
         K_template = torch.Tensor(K_template).repeat(10,1,1,1)
 
     dist_util.setup_dist(args.device)
-    if out_path == '':
-        out_path = os.path.join(os.path.dirname(args.model_path),
-                                'samples_{}_len{}_{}_seed{}'.format(name, param_lenK['len_param'][args.len_idx], niter, args.seed))
-        if args.text_prompt != '':
-            out_path += '_' + args.text_prompt.replace(' ', '_').replace('.', '')
-        elif args.input_text != '':
-            out_path += '_' + os.path.basename(args.input_text).replace('.txt', '').replace(' ', '_').replace('.', '')
-
-    if os.path.exists(out_path):
-        shutil.rmtree(out_path)
-    os.makedirs(out_path)
-
+    
 
     # this block must be called BEFORE the dataset is loaded
     if args.text_prompt != '':
@@ -116,8 +105,8 @@ def main():
     all_text = []
     # lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39, 0.48, 0.57, 0.66,0.8, 1.0])
     # lens_str = ['003','012','021','030','039','048','057','066','080','100']
-    lens_array =  np.array([0.03, 0.21, 0.39, 0.57, 1.0])
-    lens_str = ['003','021','039','057','100']
+    lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39])
+    lens_str = ['003','012','021','030','039']
     eval_K_params = torch.zeros((5,263,196,196)).to(args.device) 
     eval_len_param = torch.ones((5,263)).to(args.device) * 0.03
     for i in range(5):
@@ -130,6 +119,19 @@ def main():
     save_motion = []
     save_len_param = []
     for i in range(5):
+        out_path = ''
+        if out_path == '':
+            out_path = os.path.join(os.path.dirname(args.model_path),
+                                'samples_{}_len{}_{}_seed{}'.format(name, param_lenK['len_param'][args.len_idx], niter, args.seed))
+        if args.text_prompt != '':
+            out_path += '_' + args.text_prompt.replace(' ', '_').replace('.', '')
+        elif args.input_text != '':
+            out_path += '_' + os.path.basename(args.input_text).replace('.txt', '').replace(' ', '_').replace('.', '')
+
+        # if os.path.exists(out_path):
+        #     shutil.rmtree(out_path)
+        os.makedirs(out_path, exist_ok=True)
+
         for j in range(5):
             all_motions = []
             all_lengths = []
@@ -166,24 +168,26 @@ def main():
             sample = model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
                                 jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
                                 get_rotations_back=False)
-
             text_key = 'text' if 'text' in model_kwargs['y'] else 'action_text'
             all_text += model_kwargs['y'][text_key]
             all_motions.append(sample.cpu().numpy())
             save_motion.append(sample.cpu().numpy())
             all_lengths.append(model_kwargs['y']['lengths'].cpu().numpy())
             all_motions = np.concatenate(all_motions, axis=0)
-            all_motions = all_motions[:1]  # [bs, njoints, 6, seqlen]
+            # all_motions = all_motions[:1]  # [bs, njoints, 6, seqlen]
             all_text = all_text[:1]
             all_lengths = np.concatenate(all_lengths, axis=0)[:1]
 
             skeleton = paramUtil.t2m_kinematic_chain
+
+            print('all_motions', len(all_motions))
             motion = all_motions[0].transpose(2, 0, 1)
             # if j < 5 : 
             plot_3d_motion(out_path+'/eval_result_lens_'+lens_str[i]+'_rep_'+str(j)+'.gif', skeleton, motion, dataset=args.dataset, title='length :'+str(lens_array[i]), fps=20)
+            print('finised j:', j)
             
-            abs_path = os.path.abspath(out_path)
-            print(f'[Done] Results are at [{abs_path}]')
+    abs_path = os.path.abspath(out_path)
+    print(f'[Done] Results are at [{abs_path}]')
     with open(out_path+'/sampled_motion_lens.pkl', 'wb') as f :
         pkl.dump(save_motion, f)
 
