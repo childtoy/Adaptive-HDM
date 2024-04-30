@@ -147,7 +147,7 @@ class TrainLoop:
 
     def _load_length_module(self):
         
-        model_pth = './ckpt_length196.pt'
+        model_pth = './ckpt_length60_range1.pt'
         length_module = LengthPredctionUnet(
             name                 = 'unet',
             length               = 60, 
@@ -155,7 +155,7 @@ class TrainLoop:
             n_in_channels        = 1,
             n_base_channels      = 128,
             n_emb_dim            = 128,
-            n_cond_dim           = 1,
+            n_cond_dim           = 0,
             n_time_dim           = 0,
             n_enc_blocks         = 7, # number of encoder blocks
             n_groups             = 16, # group norm paramter
@@ -173,11 +173,16 @@ class TrainLoop:
         length_module.load_state_dict(torch.load(model_pth)['model_state_dict'])
         length_module.to(self.device)
         length_module.eval()
-        self.cls_value = torch.Tensor(
-            [0.033     , 0.14044444, 
-             0.24788889, 0.35533333, 
-             0.46277778, 0.67766667, 
-             1.        ]).to(self.device)
+        # self.cls_value = torch.Tensor(
+        #     [0.033     , 0.14044444, 
+        #      0.24788889, 0.35533333, 
+        #      0.46277778, 0.67766667, 
+        #      1.        ]).to(self.device)
+        self.cls_value = torch.Tensor([0.03, 0.12,   
+                        0.21, 0.3,
+                        0.39, 0.48,
+                        0.57, 0.66,
+                        0.8, 1.0])
         return length_module
     def _predict_length(self, motion, true_length=None):
         """
@@ -204,9 +209,16 @@ class TrainLoop:
         # pred_idx= pred_idx.reshape(batch_size, len(target_idx_array)*6)
         # pred_K_params = torch.Tensor(K_param_bag[0]).repeat(batch_size, dim_size,1,1)
         pred_K_params = self.template.clone()
-        slices = [[0, 4], [193, 196]]
-        pred_K_params[:,np.concatenate([np.arange(*i) for i in slices])] = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196))
-        pred_K_params = torch.Tensor(pred_K_params).to(self.device)
+        if args.corr_mode == 'R_trsrot' : 
+            slices = [[0, 4], [193, 196]]
+            pred_K_params[:,np.concatenate([np.arange(*i) for i in slices])] = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196))
+            pred_K_params = torch.Tensor(pred_K_params).to(self.device)
+        elif args.corr_mode == 'R_trs' : 
+            pred_K_params[:,target_idx_array] = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196))
+            pred_K_params = torch.Tensor(pred_K_params).to(self.device)
+        elif args.corr_mode == 'all' :
+            pred_K_params = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196))
+            pred_K_params = torch.Tensor(pred_K_params).to(self.device)
         # Train if all joint 
         
         # pred_K_params = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)).to(self.device)
@@ -233,15 +245,35 @@ class TrainLoop:
                     # B D 1 L 
                     B, D, _, L = motion.shape
                     # input_motion = motion[:,:,:,:60]
-                    slices = [[0, 4], [193, 196]]
-                    input_motion = motion[:,np.concatenate([np.arange(*i) for i in slices]),:,:]
-                    B_, D_, _, L_ = input_motion.shape
-                    input_motion = input_motion.reshape(B_*D_, 1, L_)
-                    true_length = cond['y']['lengths'].repeat_interleave(D_)
-                    pred_lens, pred_idx = self._predict_length(input_motion, true_length)
-                    pred_lens = pred_lens.reshape(B_, D_)
-                    org_lens = np.ones([B,D])*0.033
-                    org_lens[:,np.concatenate([np.arange(*i) for i in slices])] = pred_lens
+                    if args.corr_mode == 'R_trsrot' : 
+                        slices = [[0, 4], [193, 196]]
+                        input_motion = motion[:,np.concatenate([np.arange(*i) for i in slices]),:,:]
+                        B_, D_, _, L_ = input_motion.shape
+                        input_motion = input_motion.reshape(B_*D_, 1, L_)
+                        true_length = cond['y']['lengths'].repeat_interleave(D_)
+                        pred_lens, pred_idx = self._predict_length(input_motion, true_length)
+                        pred_lens = pred_lens.reshape(B_, D_)
+                        org_lens = np.ones([B,D])*0.033
+                        org_lens[:,np.concatenate([np.arange(*i) for i in slices])] = pred_lens
+                    elif args.corr_mode == 'R_trs' : 
+                        input_motion = motion[:,1:3,:,:]
+                        B_, D_, _, L_ = input_motion.shape
+                        input_motion = input_motion.reshape(B_*D_, 1, L_)
+                        true_length = cond['y']['lengths'].repeat_interleave(D_)
+                        pred_lens, pred_idx = self._predict_length(input_motion, true_length)
+                        pred_lens = pred_lens.reshape(B_, D_)
+                        org_lens = np.ones([B,D])*0.033
+                        org_lens[:,1:3] = pred_lens
+                    elif args.corr_mode == 'all' : 
+                        input_motion = motion[:,:,:,:]
+                        B_, D_, _, L_ = input_motion.shape
+                        input_motion = input_motion.reshape(B_*D_, 1, L_)
+                        true_length = cond['y']['lengths'].repeat_interleave(D_)
+                        pred_lens, pred_idx = self._predict_length(input_motion, true_length)
+                        pred_lens = pred_lens.reshape(B_, D_)
+                        # org_lens = np.ones([B,D])*0.033
+                        org_lens = pred_lens
+
                     # org_lens = pred_lens
                     self.pred_lens = torch.Tensor(org_lens).to(self.device)
                     self.pred_idx = pred_idx.reshape(B_, D_)
@@ -298,11 +330,11 @@ class TrainLoop:
 
         if self.args.corr_noise : 
             eval_K_params = torch.zeros((2,263,196,196)).to(self.device) 
-            eval_K_params[0,6:18] = torch.Tensor(self.K_param[0]).repeat(12,1,1)
-            eval_K_params[1,6:18] = torch.Tensor(self.K_param[-1]).repeat(12,1,1)
+            eval_K_params[0,1:3] = torch.Tensor(self.K_param[0]).repeat(2,1,1)
+            eval_K_params[1,1:3] = torch.Tensor(self.K_param[-1]).repeat(2,1,1)
             eval_len_param = torch.ones((2,263)).to(self.device) * 0.03
-            eval_len_param[0,6:18] = torch.Tensor([0.033]).to(self.device).repeat(12)
-            eval_len_param[1,6:18] = torch.Tensor([1.0]).to(self.device).repeat(12)
+            eval_len_param[0,1:3] = torch.Tensor([0.033]).to(self.device).repeat(2)
+            eval_len_param[1,1:3] = torch.Tensor([1.0]).to(self.device).repeat(2)
         else : 
             eval_K_params = None
             eval_len_param = None

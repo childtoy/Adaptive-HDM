@@ -147,6 +147,10 @@ def add_training_options(parser):
                        help="whether logging using wandb")
     group.add_argument("--project", default='GP-train', type=str,
                        help="logging wandb")
+
+    group.add_argument("--corr_mode", default='', type=str,
+                    help="Target joint for corr noise")
+
     
 def add_sampling_options(parser):
     group = parser.add_argument_group('sampling')
@@ -162,7 +166,9 @@ def add_sampling_options(parser):
                        help="Number of repetitions, per sample (text prompt/action)")
     group.add_argument("--guidance_param", default=2.5, type=float,
                        help="For classifier-free sampling - specifies the s parameter, as defined in the paper.")
-
+    group.add_argument("--corr_mode", default='', type=str,
+                       help="Target joint for corr noise")
+    
 
 def add_generate_options(parser):
     group = parser.add_argument_group('generate')

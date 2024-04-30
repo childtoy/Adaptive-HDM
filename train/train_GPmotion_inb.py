@@ -10,7 +10,7 @@ from utils.parser_util import train_args
 from utils import dist_util
 from train.training_loop_GPmotion_inb import TrainLoop
 from data_loaders.get_data import get_dataset_loader
-from utils.model_util import create_model_and_diffusion
+from workspace.childtoy.MotionGPDiffusion.utils.model_util_base import create_model_and_diffusion
 from train.train_platforms import ClearmlPlatform, TensorboardPlatform, NoPlatform  # required for the eval operation
 from cmib.data.lafan1_dataset import LAFAN1Dataset
 from cmib.data.utils import flip_bvh, increment_path, process_seq_names

@@ -105,24 +105,37 @@ def main():
     all_text = []
     # lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39, 0.48, 0.57, 0.66,0.8, 1.0])
     # lens_str = ['003','012','021','030','039','048','057','066','080','100']
-    lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39])
-    lens_str = ['003','012','021','030','039']
-    eval_K_params = torch.zeros((5,263,196,196)).to(args.device) 
-    eval_len_param = torch.ones((5,263)).to(args.device) * 0.03
-    for i in range(5):
+    lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39, 0.48, 0.57, 0.66, 0.80, 1.0])
+    lens_str = ['003','012','021','030','039', '048', '057', '066', '080', '100']
+    eval_K_params = torch.zeros((10,263,196,196)).to(args.device) 
+    eval_len_param = torch.ones((10,263)).to(args.device) * 0.03
+    for i in range(10):
         eval_K_params = K_template
-        eval_K_params[i,6:18] = torch.Tensor(K_param[i]).repeat(12,1,1)
-        eval_len_param[i,6:18] = torch.Tensor([lens_array[i]]).to(args.device).repeat(12)
+        if args.corr_mode == 'all_trs' : 
+            eval_K_params[i,1:3] = torch.Tensor(K_param[i]).repeat(2,1,1)
+            eval_len_param[i,1:3] = torch.Tensor([lens_array[i]]).to(args.device).repeat(2)
+        elif args.corr_mode == 'all_trsrot':
+            slices = [[0, 4], [193, 196]]
+            eval_K_params[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor(K_param[i]).repeat(7,1,1)
+            eval_len_param[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor([lens_array[i]]).to(args.device).repeat(7)
+        elif args.corr_mode == 'R_trs':
+            eval_K_params[i,1:3] = torch.Tensor(K_param[i]).repeat(2,1,1)
+            eval_len_param[i,1:3] = torch.Tensor([lens_array[i]]).to(args.device).repeat(2)
+        elif args.corr_mode == 'R_trsrot':
+            slices = [[0, 4], [193, 196]]
+            eval_K_params[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor(K_param[i]).repeat(7,1,1)
+            eval_len_param[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor([lens_array[i]]).to(args.device).repeat(7)
         # eval_len_param[i] = torch.Tensor([lens_array[i]]).to(args.device).repeat(263)
-
+        else :
+            assert('wrong corr_mode')
     model.eval()
     save_motion = []
     save_len_param = []
-    for i in range(5):
+    for i in range(10):
         out_path = ''
         if out_path == '':
             out_path = os.path.join(os.path.dirname(args.model_path),
-                                'samples_{}_len{}_{}_seed{}'.format(name, param_lenK['len_param'][args.len_idx], niter, args.seed))
+                                'samples_{}_{}_len{}_{}_seed{}'.format(args.corr_mode, name, param_lenK['len_param'][i], niter, args.seed))
         if args.text_prompt != '':
             out_path += '_' + args.text_prompt.replace(' ', '_').replace('.', '')
         elif args.input_text != '':
