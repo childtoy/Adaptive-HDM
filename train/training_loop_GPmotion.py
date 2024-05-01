@@ -55,15 +55,7 @@ class TrainLoop:
         self.weight_decay = args.weight_decay
         self.lr_anneal_steps = args.lr_anneal_steps
         # print(args.corr_noise)
-        if args.corr_noise :
-            with open(args.param_lenK_path, 'rb') as f : 
-                self.param_lenK = pkl.load(f)
-            self.num_len = len(self.param_lenK['K_param'])
-            self.K_param = self.param_lenK['K_param']
-            template = self.param_lenK['template']
-            self.template = torch.Tensor(template).repeat(self.batch_size, 1,1,1)
-        else : 
-            self.param_lenK = None
+        
         self.num_len = 0 
                         
         self.step = 0
@@ -95,8 +87,18 @@ class TrainLoop:
         self.device = torch.device("cpu")
         if torch.cuda.is_available() and dist_util.dev() != 'cpu':
             self.device = torch.device(dist_util.dev())        
+        
+        if args.corr_noise:
+            with open(args.param_lenK_path, 'rb') as f: 
+                self.param_lenK = pkl.load(f)
+            self.num_len = len(self.param_lenK['K_param'])
+            self.K_param = torch.Tensor(self.param_lenK['K_param']).to(self.device)
+            template = self.param_lenK['template']
+        else : 
+            self.param_lenK = None
+        self.template = torch.Tensor(template).repeat(self.batch_size, 1,1,1).to(self.device)
 
-        self.schedule_sampler_type = 'uniform'
+        self.schedule_sampler_type = 'uniform'        
         self.schedule_sampler = create_named_schedule_sampler(self.schedule_sampler_type, diffusion)
         self.eval_wrapper, self.eval_data, self.eval_gt_data = None, None, None
         # if args.dataset in ['kit', 'humanml'] and args.eval_during_training:
@@ -147,7 +149,7 @@ class TrainLoop:
 
     def _load_length_module(self):
         
-        model_pth = './ckpt_length196_z3.pt'
+        model_pth = './ckpt_length196.pt'
         length_module = LengthPredctionUnet(
             name                 = 'unet',
             length               = 60, 
@@ -200,7 +202,7 @@ class TrainLoop:
         pred = self.cls_value[pred_idx]
         
         # print('pred', pred)
-        return pred.cpu().numpy(), pred_idx.cpu().numpy()
+        return pred, pred_idx
 
     def _cal_corr_mat(self, data_shape, pred_idx, K_param_bag, true_length, target_idx_array=[1,2]) : 
         # target idx_array : idx of joints which only used root xz
@@ -210,15 +212,12 @@ class TrainLoop:
         # pred_K_params = torch.Tensor(K_param_bag[0]).repeat(batch_size, dim_size,1,1)
         pred_K_params = self.template.clone()
         if self.args.corr_mode == 'R_trsrot' : 
-            slices = [[0, 4], [193, 196]]
-            pred_K_params[:,np.concatenate([np.arange(*i) for i in slices])] = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196))
-            pred_K_params = torch.Tensor(pred_K_params).to(self.device)
+            pred_K_params[:, [0, 1, 2, 3, 193, 194, 195]] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
+
         elif self.args.corr_mode == 'R_trs' : 
-            pred_K_params[:,target_idx_array] = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196))
-            pred_K_params = torch.Tensor(pred_K_params).to(self.device)
+            pred_K_params[:,target_idx_array] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
         elif self.args.corr_mode == 'all' :
-            pred_K_params = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196))
-            pred_K_params = torch.Tensor(pred_K_params).to(self.device)
+            pred_K_params = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
         # Train if all joint 
         
         # pred_K_params = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)).to(self.device)
@@ -246,15 +245,14 @@ class TrainLoop:
                     B, D, _, L = motion.shape
                     # input_motion = motion[:,:,:,:60]
                     if self.args.corr_mode == 'R_trsrot' : 
-                        slices = [[0, 4], [193, 196]]
-                        input_motion = motion[:,np.concatenate([np.arange(*i) for i in slices]),:,:]
+                        input_motion = motion[:,[0, 1, 2, 3, 193, 194, 195],:,:]
                         B_, D_, _, L_ = input_motion.shape
                         input_motion = input_motion.reshape(B_*D_, 1, L_)
                         true_length = cond['y']['lengths'].repeat_interleave(D_)
                         pred_lens, pred_idx = self._predict_length(input_motion, true_length)
                         pred_lens = pred_lens.reshape(B_, D_)
-                        org_lens = np.ones([B,D])*0.033
-                        org_lens[:,np.concatenate([np.arange(*i) for i in slices])] = pred_lens
+                        org_lens = (torch.ones([B,D])*0.033).to(self.device)
+                        org_lens[:,[0, 1, 2, 3, 193, 194, 195]] = pred_lens
                     elif self.args.corr_mode == 'R_trs' : 
                         input_motion = motion[:,1:3,:,:]
                         B_, D_, _, L_ = input_motion.shape
@@ -262,7 +260,7 @@ class TrainLoop:
                         true_length = cond['y']['lengths'].repeat_interleave(D_)
                         pred_lens, pred_idx = self._predict_length(input_motion, true_length)
                         pred_lens = pred_lens.reshape(B_, D_)
-                        org_lens = np.ones([B,D])*0.033
+                        org_lens = (torch.ones([B,D])*0.033).to(self.device)
                         org_lens[:,1:3] = pred_lens
                     elif self.args.corr_mode == 'all' : 
                         input_motion = motion[:,:,:,:]
@@ -275,7 +273,7 @@ class TrainLoop:
                         org_lens = pred_lens
 
                     # org_lens = pred_lens
-                    self.pred_lens = torch.Tensor(org_lens).to(self.device)
+                    self.pred_lens = org_lens
                     self.pred_idx = pred_idx.reshape(B_, D_)
                     # motion = motion.reshape(B, D, 1, L)
                     self.pred_K_param = self._cal_corr_mat(motion.shape, pred_idx, self.K_param, cond['y']['lengths'])
