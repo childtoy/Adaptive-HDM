@@ -134,13 +134,13 @@ class GaussianDiffusion:
         lambda_root_vel=0.,
         lambda_vel_rcxyz=0.,
         lambda_fc=0.,
-        noise_blend=False,
     ):
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
         self.loss_type = loss_type
         self.rescale_timesteps = rescale_timesteps
         self.data_rep = data_rep
+
         if data_rep != 'rot_vel' and lambda_pose != 1.:
             raise ValueError('lambda_pose is relevant only when training on velocities!')
         self.lambda_pose = lambda_pose
@@ -156,8 +156,6 @@ class GaussianDiffusion:
         if self.lambda_rcxyz > 0. or self.lambda_vel > 0. or self.lambda_root_vel > 0. or \
                 self.lambda_vel_rcxyz > 0. or self.lambda_fc > 0.:
             assert self.loss_type == LossType.MSE, 'Geometric losses are supported by MSE loss type only!'
-
-        self.noise_blend = noise_blend
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -536,18 +534,15 @@ class GaussianDiffusion:
             model_kwargs=model_kwargs,
         )
         noise = th.randn_like(x)
-        noise_org = noise.clone().to(x.device)
         
         if K_params is not None : 
             noise_expand = noise.squeeze(2).unsqueeze(-1)
-            K_chols = K_params
+            K_chols = th.Tensor(K_params).to(x.device)
             K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)) # [B x D x L x L]
             noise = K_chols_torch_tile @ noise_expand.to(x.device) # [B x D x L x 1]
             noise = noise.squeeze(dim=3) # [B x D x L]
             noise = noise.unsqueeze(2)
-            if self.noise_blend : 
-                noise = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape) * noise
-                + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise_org
+        
         # print('const_noise', const_noise)
         if const_noise:
             noise = noise[[0]].repeat(x.shape[0], 1, 1, 1)
@@ -572,7 +567,6 @@ class GaussianDiffusion:
         x,
         t,
         K_params,
-        len_param,
         clip_denoised=True,
         denoised_fn=None,
         cond_fn=None,
@@ -601,25 +595,12 @@ class GaussianDiffusion:
                 model,
                 x,
                 t,
-                len_param,
+                K_params,
                 clip_denoised=clip_denoised,
                 denoised_fn=denoised_fn,
                 model_kwargs=model_kwargs,
             )
             noise = th.randn_like(x)
-            noise_org = noise.clone().to(x.device)
-            
-            if K_params is not None : 
-                noise_expand = noise.squeeze(2).unsqueeze(-1)
-                K_chols = K_params
-                K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)) # [B x D x L x L]
-                noise = K_chols_torch_tile @ noise_expand.to(x.device) # [B x D x L x 1]
-                noise = noise.squeeze(dim=3) # [B x D x L]
-                noise = noise.unsqueeze(2)
-                if self.noise_blend : 
-                    noise = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape) * noise
-                    + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise_org            
-            
             nonzero_mask = (
                 (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
             )  # no noise when t == 0
@@ -733,10 +714,9 @@ class GaussianDiffusion:
             img = noise
         else:
             img = th.randn(*shape, device=device)
-            noise_org = img.clone().to(device)
             if K_params is not None : 
                 img_expand = img.squeeze(2).unsqueeze(-1)
-                K_chols = K_params
+                K_chols = th.Tensor(K_params).to(device)
                 K_chols_torch_tile = th.tile(input=K_chols,dims=(shape[0],1,1,1)) # [B x D x L x L]
                 img = K_chols_torch_tile @ img_expand.to(device) # [B x D x L x 1]
                 img = img.squeeze(dim=3) # [B x D x L]
@@ -1316,10 +1296,9 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-            noise_org = noise.clone().to(x_start.device)
         if K_params is not None : 
             noise_expand = noise.squeeze(2).unsqueeze(-1)
-            K_chols = K_params
+            K_chols = th.Tensor(K_params).to(x_start.device)
             K_chols_torch_tile = K_chols
             #debug adjust only root position 
             # K_chols_torch_tile[:,:-6,:,:] = 1e-5
@@ -1328,10 +1307,7 @@ class GaussianDiffusion:
             noise = K_chols_torch_tile @ noise_expand.to(x_start.device) # [B x D x L x 1]
             noise = noise.squeeze(dim=3) # [B x D x L]
             noise = noise.unsqueeze(2)
-            # noise blending 
-            if self.noise_blend : 
-                noise = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * noise
-                + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise_org 
+        
             
         x_t = self.q_sample(x_start, t, noise=noise)
 

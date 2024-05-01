@@ -71,7 +71,7 @@ def add_diffusion_options(parser):
     group.add_argument("--diffusion_steps", default=1000, type=int,
                        help="Number of diffusion steps (denoted T in the paper)")
     group.add_argument("--sigma_small", default=True, type=bool, help="Use smaller sigma values.")
-
+    group.add_argument("--noise_blend", default=False, type=bool, help="Correlated noise + Gaussian")
     group.add_argument("--pred_xstart", action='store_true', help="Prediction xstart. If false pred noise.")
 
 def add_model_options(parser):

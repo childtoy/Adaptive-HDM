@@ -328,8 +328,8 @@ class TrainLoop:
 
         if self.args.corr_noise : 
             eval_K_params = torch.zeros((2,263,196,196)).to(self.device) 
-            eval_K_params[0,1:3] = torch.Tensor(self.K_param[0]).repeat(2,1,1)
-            eval_K_params[1,1:3] = torch.Tensor(self.K_param[-1]).repeat(2,1,1)
+            eval_K_params[0,1:3] = self.K_param[0].repeat(2,1,1)
+            eval_K_params[1,1:3] = self.K_param[-1].repeat(2,1,1)
             eval_len_param = torch.ones((2,263)).to(self.device) * 0.03
             eval_len_param[0,1:3] = torch.Tensor([0.033]).to(self.device).repeat(2)
             eval_len_param[1,1:3] = torch.Tensor([1.0]).to(self.device).repeat(2)
