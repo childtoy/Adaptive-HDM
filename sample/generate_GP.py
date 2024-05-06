@@ -39,7 +39,6 @@ def main():
 
     dist_util.setup_dist(args.device)
     
-
     # this block must be called BEFORE the dataset is loaded
     if args.text_prompt != '':
         texts = [args.text_prompt]
@@ -105,11 +104,19 @@ def main():
     all_text = []
     # lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39, 0.48, 0.57, 0.66,0.8, 1.0])
     # lens_str = ['003','012','021','030','039','048','057','066','080','100']
-    lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39, 0.48, 0.57, 0.66, 0.80, 1.0])
-    lens_str = ['003','012','021','030','039', '048', '057', '066', '080', '100']
-    eval_K_params = torch.zeros((10,263,196,196)).to(args.device) 
-    eval_len_param = torch.ones((10,263)).to(args.device) * 0.03
-    for i in range(10):
+    lens_array =  np.array([0.033     , 0.14044444, 
+             0.24788889, 0.35533333, 
+             0.46277778, 0.67766667, 
+             1.        ])
+    lens_array =  np.array([0.033     , 0.14044444, 
+                            0.24788889, 0.35533333, 
+                            0.46277778, 0.67766667, 
+                            1.        ,
+                            0.08, 0.19, 0.30])
+    lens_str = ['003','014','024','035','046', '067', '100', '008', '019', '030']
+    eval_K_params = torch.zeros((len(lens_array),263,196,196)).to(args.device) 
+    eval_len_param = torch.ones((len(lens_array),263)).to(args.device) * 0.03
+    for i in range(len(lens_array)):
         eval_K_params = K_template
         if args.corr_mode == 'all_trs' : 
             eval_K_params[i,1:3] = torch.Tensor(K_param[i]).repeat(2,1,1)
@@ -126,16 +133,20 @@ def main():
             eval_K_params[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor(K_param[i]).repeat(7,1,1)
             eval_len_param[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor([lens_array[i]]).to(args.device).repeat(7)
         # eval_len_param[i] = torch.Tensor([lens_array[i]]).to(args.device).repeat(263)
+        elif args.corr_mode == 'R_trsrot':
+            slices = [[4, 67]]
+            eval_K_params[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor(K_param[i]).repeat(7,1,1)
+            eval_len_param[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor([lens_array[i]]).to(args.device).repeat(7)
         else :
             assert('wrong corr_mode')
     model.eval()
     save_motion = []
     save_len_param = []
-    for i in range(10):
+    for i in range(len(lens_array)):
         out_path = ''
         if out_path == '':
             out_path = os.path.join(os.path.dirname(args.model_path),
-                                'samples_{}_{}_len{}_{}_seed{}'.format(args.corr_mode, name, param_lenK['len_param'][i], niter, args.seed))
+                                'samples_{}_{}_len{}_{}_seed{}'.format(args.corr_mode, name, lens_str[i], niter, args.seed))
         if args.text_prompt != '':
             out_path += '_' + args.text_prompt.replace(' ', '_').replace('.', '')
         elif args.input_text != '':
@@ -149,6 +160,7 @@ def main():
             all_motions = []
             all_lengths = []
             all_text = []
+            
             # if args.guidance_param != 1:
                 # model_kwargs['y']['scale'] = torch.ones(1, device=dist_util.dev()) * args.guidance_param
 
@@ -168,6 +180,7 @@ def main():
                 dump_steps=None,
                 noise=None,
                 const_noise=False,
+                partial_corr_noise=args.partial_corr_noise
             )        
             
                     
