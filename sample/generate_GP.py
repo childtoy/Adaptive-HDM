@@ -98,21 +98,24 @@ def main():
             collate_args = [dict(arg, action=one_action, action_text=one_action_text) for
                             arg, one_action, one_action_text in zip(collate_args, action, action_text)]
         _, model_kwargs = collate(collate_args)
-
+    
+    print(model_kwargs)
+    
     all_motions = []
     all_lengths = []
     all_text = []
     # lens_array =  np.array([0.03, 0.12, 0.21, 0.3, 0.39, 0.48, 0.57, 0.66,0.8, 1.0])
     # lens_str = ['003','012','021','030','039','048','057','066','080','100']
-    lens_array =  np.array([0.033     , 0.14044444, 
-             0.24788889, 0.35533333, 
-             0.46277778, 0.67766667, 
-             1.        ])
+    # lens_array =  np.array([0.033     , 0.14044444, 
+    #          0.24788889, 0.35533333, 
+    #          0.46277778, 0.67766667, 
+    #          1.        ])
     lens_array =  np.array([0.033     , 0.14044444, 
                             0.24788889, 0.35533333, 
                             0.46277778, 0.67766667, 
                             1.        ,
                             0.08, 0.19, 0.30])
+    
     lens_str = ['003','014','024','035','046', '067', '100', '008', '019', '030']
     eval_K_params = torch.zeros((len(lens_array),263,196,196)).to(args.device) 
     eval_len_param = torch.ones((len(lens_array),263)).to(args.device) * 0.03
@@ -169,7 +172,7 @@ def main():
             sample = sample_fn(
                 model,
                 # (args.batch_size, model.njoints, model.nfeats, n_frames),  # BUG FIX - this one caused a mismatch between training and inference
-                (20, model.njoints, model.nfeats, 196),  # BUG FIX
+                (10, model.njoints, model.nfeats, 196),  # BUG FIX
                 eval_K_params[i].unsqueeze(0),
                 eval_len_param[i].unsqueeze(0),
                 clip_denoised=False,
@@ -206,10 +209,15 @@ def main():
 
             skeleton = paramUtil.t2m_kinematic_chain
 
-            print('all_motions', len(all_motions))
+            print('all_motions', len(all_motions)) # frames
             motion = all_motions[0].transpose(2, 0, 1)
             # if j < 5 : 
             plot_3d_motion(out_path+'/eval_result_lens_'+lens_str[i]+'_rep_'+str(j)+'.gif', skeleton, motion, dataset=args.dataset, title='length :'+str(lens_array[i]), fps=20)
+            
+            if j == 0:
+                motion = all_motions.transpose(0, 3, 1, 2)
+                np.save(out_path+'/eval_result_lens_'+lens_str[i]+'_rep_'+str(j)+'.npy', motion)
+            
             print('finised j:', j)
             
     abs_path = os.path.abspath(out_path)
