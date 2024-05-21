@@ -137,4 +137,5 @@ body_models
 *.pkl
 *.pt
 *.sh
+*.ckpt
 experiment_1d/
