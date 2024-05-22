@@ -147,8 +147,9 @@ def add_training_options(parser):
                        help="whether logging using wandb")
     group.add_argument("--project", default='GP-train', type=str,
                        help="logging wandb")
-
     group.add_argument("--corr_mode", default='', type=str,
+                    help="Target joint for corr noise")
+    group.add_argument("--partial_corr_noise", default=None, type=int,
                     help="Target joint for corr noise")
 
     
@@ -159,7 +160,7 @@ def add_sampling_options(parser):
     group.add_argument("--output_dir", default='', type=str,
                        help="Path to results dir (auto created by the script). "
                             "If empty, will create dir in parallel to checkpoint.")
-    group.add_argument("--num_samples", default=1, type=int,
+    group.add_argument("--num_samples", default=5, type=int,
                        help="Maximal number of prompts to sample, "
                             "if loading dataset from file, this field will be ignored.")
     group.add_argument("--num_repetitions", default=3, type=int,
@@ -168,6 +169,7 @@ def add_sampling_options(parser):
                        help="For classifier-free sampling - specifies the s parameter, as defined in the paper.")
     group.add_argument("--corr_mode", default='', type=str,
                        help="Target joint for corr noise")
+    group.add_argument("--partial_corr_noise", default=None, type=int)
     
 
 def add_generate_options(parser):
@@ -185,7 +187,7 @@ def add_generate_options(parser):
                        help="Path to a text file that lists names of actions to be synthesized. Names must be a subset of dataset/uestc/info/action_classes.txt if sampling from uestc, "
                             "or a subset of [warm_up,walk,run,jump,drink,lift_dumbbell,sit,eat,turn steering wheel,phone,boxing,throw] if sampling from humanact12. "
                             "If no file is specified, will take action names from dataset.")
-    group.add_argument("--text_prompt", default='a man waves his right hand', type=str,
+    group.add_argument("--text_prompt", default='a man moves backward', type=str,
                        help="A text prompt to be generated. If empty, will take text prompts from dataset.")
     group.add_argument("--action_name", default='', type=str,
                        help="An action name to be generated. If empty, will take text prompts from dataset.")
