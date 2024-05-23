@@ -150,8 +150,9 @@ def add_training_options(parser):
     group.add_argument("--corr_mode", default='', type=str,
                     help="Target joint for corr noise")
     group.add_argument("--partial_corr_noise", default=None, type=int,
-                    help="Target joint for corr noise")
-
+                    help="The start time step to apply corr noise")
+    group.add_argument("--augmentation", action='store_true',
+                    help="for data augmentation")
     
 def add_sampling_options(parser):
     group = parser.add_argument_group('sampling')

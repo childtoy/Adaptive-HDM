@@ -11,6 +11,7 @@ import blobfile as bf
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
+import torch.nn.functional as F
 
 from diffusion import logger
 from utils import dist_util
@@ -213,11 +214,14 @@ class TrainLoop:
         pred_K_params = self.template.clone()
         if self.args.corr_mode == 'R_trsrot' : 
             pred_K_params[:, [0, 1, 2, 3, 193, 194, 195]] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
-
         elif self.args.corr_mode == 'R_trs' : 
             pred_K_params[:,target_idx_array] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
         elif self.args.corr_mode == 'all' :
             pred_K_params = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
+        elif self.args.corr_mode == 'LP' :
+            pred_K_params[:,4:67] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
+        elif self.args.corr_mode == 'LBody' :
+            pred_K_params[:,4:22] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
         # Train if all joint 
         
         # pred_K_params = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)).to(self.device)
@@ -243,7 +247,29 @@ class TrainLoop:
                 if self.args.corr_noise :        
                     # B D 1 L 
                     B, D, _, L = motion.shape
-                    # input_motion = motion[:,:,:,:60]
+                    if self.args.augmentation:
+                        ratio = torch.Tensor([0.6, 0.8, 1.0, 1.2]).to(self.device)
+                        ratio_idx = np.random.choice(4, B)
+                        true_length = cond['y']['lengths']
+                        aug_true_length = true_length * ratio[ratio_idx]
+                        # motion interpolation
+                        augmented_motions = []
+                        for i in range(B):
+                            scale_factor = float(ratio[ratio_idx[i]])
+                            aug_motion_i = motion[i, :, :, :true_length[i]].unsqueeze(0)
+                            augmented_motion_i = F.interpolate(aug_motion_i,scale_factor=(1, scale_factor))
+                            if augmented_motion_i.shape[-1] < 196:
+                                augmented_motion_i = torch.cat([augmented_motion_i,
+                                        torch.zeros((1, D, 1, L - augmented_motion_i.shape[-1])).to(self.device)
+                                        ], dim=-1)
+                            else:
+                                augmented_motion_i = augmented_motion_i[:, :, :, :196]
+                            augmented_motions.append(augmented_motion_i)                            
+                        motion = torch.cat(augmented_motions, dim=0).to(self.device)
+                        # for changing true length of cond['y']
+                        over_indices = torch.where(aug_true_length > L)[0]
+                        aug_true_length[over_indices] = L
+                        cond['y']['lengths'] = aug_true_length.to(self.device)
                     if self.args.corr_mode == 'R_trsrot' : 
                         input_motion = motion[:,[0, 1, 2, 3, 193, 194, 195],:,:]
                         B_, D_, _, L_ = input_motion.shape
@@ -271,6 +297,24 @@ class TrainLoop:
                         pred_lens = pred_lens.reshape(B_, D_)
                         # org_lens = np.ones([B,D])*0.033
                         org_lens = pred_lens
+                    elif self.args.corr_mode == 'LP':
+                        input_motion = motion[:,4:67,:,:]
+                        B_, D_, _, L_ = input_motion.shape
+                        input_motion = input_motion.reshape(B_*D_, 1, L_)
+                        true_length = cond['y']['lengths'].repeat_interleave(D_)
+                        pred_lens, pred_idx = self._predict_length(input_motion, true_length)
+                        pred_lens = pred_lens.reshape(B_, D_)
+                        org_lens = (torch.ones([B,D])*0.033).to(self.device)
+                        org_lens[:,4:67] = pred_lens
+                    elif self.args.corr_mode == 'LBody':
+                        input_motion = motion[:,4:22,:,:]
+                        B_, D_, _, L_ = input_motion.shape
+                        input_motion = input_motion.reshape(B_*D_, 1, L_)
+                        true_length = cond['y']['lengths'].repeat_interleave(D_)
+                        pred_lens, pred_idx = self._predict_length(input_motion, true_length)
+                        pred_lens = pred_lens.reshape(B_, D_)
+                        org_lens = (torch.ones([B,D])*0.033).to(self.device)
+                        org_lens[:,4:22] = pred_lens
 
                     # org_lens = pred_lens
                     self.pred_lens = org_lens
@@ -357,6 +401,7 @@ class TrainLoop:
                 dump_steps=None,
                 noise=None,
                 const_noise=False,
+                partial_corr_noise=self.args.partial_corr_noise
             )        
             
                     # Recover XYZ *positions* from HumanML3D vector representation
@@ -383,9 +428,9 @@ class TrainLoop:
             skeleton = paramUtil.t2m_kinematic_chain
             motion = all_motions[0].transpose(2, 0, 1)
             if i == 0 :
-                plot_3d_motion(self.save_dir+'/eval_result_fast_'+str(self.step)+'.mp4', skeleton, motion, dataset=self.args.dataset, title='length : 0.03', fps=20)
+                plot_3d_motion(self.save_dir+'/eval_result_fast_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 0.03', fps=20)
             else : 
-                plot_3d_motion(self.save_dir+'/eval_result_slow_'+str(self.step)+'.mp4', skeleton, motion, dataset=self.args.dataset, title='length : 1.0', fps=20)
+                plot_3d_motion(self.save_dir+'/eval_result_slow_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 1.0', fps=20)
         
         self.model.train()
         # if self.eval_wrapper is not None:
@@ -496,7 +541,8 @@ class TrainLoop:
                 K_params=self.pred_K_param,
                 len_param=self.pred_lens,
                 model_kwargs=micro_cond,
-                dataset=self.data.dataset
+                dataset=self.data.dataset,
+                partial_corr_noise=self.args.partial_corr_noise
             )
 
             if last_batch or not self.use_ddp:
