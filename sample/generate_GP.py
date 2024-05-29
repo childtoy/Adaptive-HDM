@@ -78,8 +78,8 @@ def main():
     state_dict = torch.load(args.model_path, map_location='cpu')
     load_model_wo_clip(model, state_dict)
 
-    # if args.guidance_param != 1:
-        # model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler
+    if args.guidance_param != 1:
+        model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler
     model.to(dist_util.dev())
     model.eval()  # disable random masking
 
@@ -113,10 +113,15 @@ def main():
     lens_array =  np.array([0.033     , 0.14044444, 
                             0.24788889, 0.35533333, 
                             0.46277778, 0.67766667, 
-                            1.        ,
-                            0.08, 0.19, 0.30])
+                            1.        ,])
+                            # 0.08, 0.19, 0.30])
+    # lens_array = np.array([0.033,
+    #                        0.247888889,
+    #                        0.462777778,
+    #                        1.0])
     
-    lens_str = ['003','014','024','035','046', '067', '100', '008', '019', '030']
+    lens_str = ['003','014','024','035','046', '067', '100']#, '008', '019', '030']
+    # lens_str = ['003','024','046','100']
     eval_K_params = torch.zeros((len(lens_array),263,196,196)).to(args.device) 
     eval_len_param = torch.ones((len(lens_array),263)).to(args.device) * 0.03
     for i in range(len(lens_array)):
@@ -148,7 +153,7 @@ def main():
     for i in range(len(lens_array)):
         out_path = ''
         if out_path == '':
-            out_path = os.path.join(os.path.dirname(args.model_path),
+            out_path = os.path.join(os.path.dirname(args.model_path),args.text_prompt+'_cfg',
                                 'samples_{}_{}_len{}_{}_seed{}'.format(args.corr_mode, name, lens_str[i], niter, args.seed))
         if args.text_prompt != '':
             out_path += '_' + args.text_prompt.replace(' ', '_').replace('.', '')
@@ -164,15 +169,20 @@ def main():
             all_lengths = []
             all_text = []
             
-            # if args.guidance_param != 1:
-                # model_kwargs['y']['scale'] = torch.ones(1, device=dist_util.dev()) * args.guidance_param
+            if args.guidance_param != 1:
+                model_kwargs['y']['scale'] = torch.ones(1, device=dist_util.dev()) * args.guidance_param
 
+            if j == 0:
+                num_samples = 100
+            else: 
+                num_samples = 2
+                
             # print('eval_K_params[i].unsqueeze(0).repeat(20,1,1,1)', eval_K_params[i].unsqueeze(0).repeat(20,1,1,1).shape)
             sample_fn = diffusion.p_sample_loop
             sample = sample_fn(
                 model,
                 # (args.batch_size, model.njoints, model.nfeats, n_frames),  # BUG FIX - this one caused a mismatch between training and inference
-                (10, model.njoints, model.nfeats, 196),  # BUG FIX
+                (num_samples, model.njoints, model.nfeats, 196),  # BUG FIX
                 eval_K_params[i].unsqueeze(0),
                 eval_len_param[i].unsqueeze(0),
                 clip_denoised=False,

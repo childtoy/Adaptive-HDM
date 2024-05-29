@@ -258,12 +258,12 @@ class TrainLoop:
                             scale_factor = float(ratio[ratio_idx[i]])
                             aug_motion_i = motion[i, :, :, :true_length[i]].unsqueeze(0)
                             augmented_motion_i = F.interpolate(aug_motion_i,scale_factor=(1, scale_factor))
-                            if augmented_motion_i.shape[-1] < 196:
+                            if augmented_motion_i.shape[-1] < L:
                                 augmented_motion_i = torch.cat([augmented_motion_i,
                                         torch.zeros((1, D, 1, L - augmented_motion_i.shape[-1])).to(self.device)
                                         ], dim=-1)
                             else:
-                                augmented_motion_i = augmented_motion_i[:, :, :, :196]
+                                augmented_motion_i = augmented_motion_i[:, :, :, :L]
                             augmented_motions.append(augmented_motion_i)                            
                         motion = torch.cat(augmented_motions, dim=0).to(self.device)
                         # for changing true length of cond['y']
