@@ -1,1 +1,0 @@
-python3 -m train.train_GPmotion_inb --model_path ./save/corr_noise_root/model000300000.pt --save_dir save/corr_noise_root --dataset humanml --device 0
