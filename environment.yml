@@ -1,8 +1,7 @@
-name: mdm
+name: ahdm2
 channels:
-  - pytorch
-  - anaconda
   - conda-forge
+  - anaconda
   - defaults
 dependencies:
   - _libgcc_mutex=0.1=main
@@ -85,7 +84,6 @@ dependencies:
   - python=3.7.13=h12debd9_0
   - python-dateutil=2.8.2=pyhd3eb1b0_0
   - python_abi=3.7=2_cp37m
-  - pytorch=1.7.1=py3.7_cuda11.0.221_cudnn8.0.5_0
   - qt=5.9.7=h5867ecd_1
   - readline=8.1.2=h7f8727e_1
   - requests=2.28.1=pyhd8ed1ab_1
@@ -103,8 +101,6 @@ dependencies:
   - sqlite=3.39.3=h5082296_0
   - threadpoolctl=2.2.0=pyh0d69192_0
   - tk=8.6.12=h1ccaba5_0
-  - torchaudio=0.7.2=py37
-  - torchvision=0.8.2=py37_cu110
   - tornado=6.2=py37h5eee18b_0
   - tqdm=4.64.1=py37h06a4308_0
   - trimesh=3.15.3=pyh1a96a4e_0
@@ -115,22 +111,29 @@ dependencies:
   - zlib=1.2.12=h5eee18b_3
   - zstd=1.4.9=haebb681_0
   - pip:
-    - blis==0.7.8
-    - chumpy==0.70
-    - click==8.1.3
-    - confection==0.0.2
-    - ftfy==6.1.1
-    - importlib-metadata==5.0.0
-    - lxml==4.9.1
-    - murmurhash==1.0.8
-    - preshed==3.0.7
-    - pycryptodomex==3.15.0
-    - regex==2022.9.13
-    - smplx==0.1.28
-    - srsly==2.4.4
-    - thinc==8.0.17
-    - typing-extensions==4.1.1
-    - urllib3==1.26.12
-    - wasabi==0.10.1
-    - wcwidth==0.2.5
-prefix: /disk2/guytevet/anaconda3/envs/mdm-venv
+      - blis==0.7.8
+      - blobfile==2.0.2
+      - chumpy==0.70
+      - click==8.1.3
+      - confection==0.0.2
+      - ftfy==6.1.1
+      - importlib-metadata==5.0.0
+      - ipdb==0.13.13
+      - lxml==4.9.1
+      - murmurhash==1.0.8
+      - preshed==3.0.7
+      - pycryptodomex==3.15.0
+      - regex==2022.9.13
+      - seaborn==0.12.2
+      - smplx==0.1.28
+      - srsly==2.4.4
+      - thinc==8.0.17
+      - torch==1.13.1
+      - torchaudio==0.13.1
+      - torchvision==0.14.1
+      - typing-extensions==4.1.1
+      - urllib3==1.26.12
+      - wandb==0.17.6
+      - wasabi==0.10.1
+      - wcwidth==0.2.5
+prefix: /home/drizzle0171/miniconda3/envs/ahdm

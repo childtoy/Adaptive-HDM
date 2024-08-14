@@ -134,7 +134,6 @@ class GaussianDiffusion:
         lambda_root_vel=0.,
         lambda_vel_rcxyz=0.,
         lambda_fc=0.,
-        noise_blend=False,
     ):
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
@@ -156,8 +155,6 @@ class GaussianDiffusion:
         if self.lambda_rcxyz > 0. or self.lambda_vel > 0. or self.lambda_root_vel > 0. or \
                 self.lambda_vel_rcxyz > 0. or self.lambda_fc > 0.:
             assert self.loss_type == LossType.MSE, 'Geometric losses are supported by MSE loss type only!'
-
-        self.noise_blend = noise_blend
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -508,7 +505,6 @@ class GaussianDiffusion:
         cond_fn=None,
         model_kwargs=None,
         const_noise=False,
-        partial_corr_noise=None,
     ):
         """
         Sample x_{t-1} from the model at the given timestep.
@@ -542,22 +538,11 @@ class GaussianDiffusion:
         if K_params is not None : 
             noise_expand = noise.squeeze(2).unsqueeze(-1)
             K_chols = K_params
-            K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)).to(x.device) # [B x D x L x L]
+            K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)).to(x.device) if x.shape[0] != K_chols.shape[0] else K_chols.to(x.device) # [B x D x L x L]
             corr_noise = K_chols_torch_tile @ noise_expand.to(x.device) # [B x D x L x 1]
             corr_noise = corr_noise.squeeze(dim=3) # [B x D x L]
             corr_noise = corr_noise.unsqueeze(2)
             
-            if partial_corr_noise is not None:
-                if partial_corr_noise < 25:
-                    indices = torch.where(t <= partial_corr_noise)[0]
-                else:
-                    indices = torch.where(t >= partial_corr_noise)[0]
-                noise[indices] = corr_noise[indices]
-                
-            if self.noise_blend : 
-                noise = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape) * noise
-                + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise_org
-        # print('const_noise', const_noise)
         if const_noise:
             noise = noise[[0]].repeat(x.shape[0], 1, 1, 1)
 
@@ -586,7 +571,6 @@ class GaussianDiffusion:
         denoised_fn=None,
         cond_fn=None,
         model_kwargs=None,
-        partial_corr_noise=None,
     ):
         """
         Sample x_{t-1} from the model at the given timestep.
@@ -622,22 +606,11 @@ class GaussianDiffusion:
             if K_params is not None : 
                 noise_expand = noise.squeeze(2).unsqueeze(-1)
                 K_chols = K_params
-                K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)) # [B x D x L x L]
+                K_chols_torch_tile = th.tile(input=K_chols,dims=(x.shape[0],1,1,1)) if x.shape[0] != K_chols.shape[0] else K_chols # [B x D x L x L]
                 corr_noise = K_chols_torch_tile @ noise_expand.to(x.device) # [B x D x L x 1]
                 corr_noise = corr_noise.squeeze(dim=3) # [B x D x L]
                 corr_noise = corr_noise.unsqueeze(2)
                 
-                if partial_corr_noise is not None:
-                    if partial_corr_noise < 25:
-                        indices = torch.where(t <= partial_corr_noise)[0]
-                    else:
-                        indices = torch.where(t >= partial_corr_noise)[0]
-                    noise[indices] = corr_noise[indices]
-                    
-                if self.noise_blend : 
-                    noise = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape) * noise
-                    + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise_org            
-            
             nonzero_mask = (
                 (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
             )  # no noise when t == 0
@@ -667,7 +640,6 @@ class GaussianDiffusion:
         cond_fn_with_grad=False,
         dump_steps=None,
         const_noise=False,
-        partial_corr_noise=None
     ):
         """
         Generate samples from the model.
@@ -710,7 +682,6 @@ class GaussianDiffusion:
             randomize_class=randomize_class,
             cond_fn_with_grad=cond_fn_with_grad,
             const_noise=const_noise,
-            partial_corr_noise=partial_corr_noise
         )):
             if dump_steps is not None and i in dump_steps:
                 dump.append(deepcopy(sample["sample"]))
@@ -737,7 +708,6 @@ class GaussianDiffusion:
         randomize_class=False,
         cond_fn_with_grad=False,
         const_noise=False,
-        partial_corr_noise=None
     ):
         """
         Generate samples from the model and yield intermediate samples from
@@ -758,7 +728,7 @@ class GaussianDiffusion:
             if K_params is not None : 
                 img_expand = img.squeeze(2).unsqueeze(-1)
                 K_chols = K_params
-                K_chols_torch_tile = th.tile(input=K_chols,dims=(shape[0],1,1,1)).to(device) # [B x D x L x L]
+                K_chols_torch_tile = th.tile(input=K_chols,dims=(shape[0],1,1,1)).to(device) if shape[0] != K_chols.shape[0] else K_chols.to(device) # [B x D x L x L]
                 img = K_chols_torch_tile @ img_expand.to(device) # [B x D x L x 1]
                 img = img.squeeze(dim=3) # [B x D x L]
                 img = img.unsqueeze(2)
@@ -797,7 +767,6 @@ class GaussianDiffusion:
                     cond_fn=cond_fn,
                     model_kwargs=model_kwargs,
                     const_noise=const_noise,
-                    partial_corr_noise=partial_corr_noise
                 )
                 yield out
                 img = out["sample"]
@@ -1311,7 +1280,7 @@ class GaussianDiffusion:
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
     def training_losses(self, model, x_start, t, K_params=None, len_param=None, model_kwargs=None, noise=None, 
-                        dataset=None, partial_corr_noise=None):
+                        dataset=None):
         """
         Compute training losses for a single timestep.
 
@@ -1350,17 +1319,6 @@ class GaussianDiffusion:
             corr_noise = corr_noise.squeeze(dim=3) # [B x D x L]
             corr_noise = corr_noise.unsqueeze(2)
 
-            if partial_corr_noise is not None:
-                if partial_corr_noise < 25:
-                    indices = torch.where(t <= partial_corr_noise)[0]
-                else:
-                    indices = torch.where(t >= partial_corr_noise)[0]
-                noise[indices] = corr_noise[indices]
-
-        if self.noise_blend : 
-                noise = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * noise
-                + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise_org 
-            
         x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}

@@ -33,7 +33,7 @@ def main():
     with open(args.param_lenK_path, 'rb') as f : 
         param_lenK = pkl.load(f)    
         num_len = len(param_lenK['K_param'])
-        K_param = param_lenK['K_param']
+        K_param = torch.Tensor(param_lenK['K_param']).to(args.device)
         K_template = param_lenK['template']
         K_template = torch.Tensor(K_template).repeat(10,1,1,1)
 
@@ -126,7 +126,7 @@ def main():
     eval_len_param = torch.ones((len(lens_array),263)).to(args.device) * 0.03
     for i in range(len(lens_array)):
         eval_K_params = K_template
-        if args.corr_mode == 'all_trs' : 
+        if args.corr_mode == 'all_trs': 
             eval_K_params[i,1:3] = torch.Tensor(K_param[i]).repeat(2,1,1)
             eval_len_param[i,1:3] = torch.Tensor([lens_array[i]]).to(args.device).repeat(2)
         elif args.corr_mode == 'all_trsrot':
@@ -145,11 +145,14 @@ def main():
             slices = [[4, 67]]
             eval_K_params[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor(K_param[i]).repeat(7,1,1)
             eval_len_param[i,np.concatenate([np.arange(*k) for k in slices])] = torch.Tensor([lens_array[i]]).to(args.device).repeat(7)
-        else :
+        elif args.corr_mode == 'all':
+            
+        # else :
             assert('wrong corr_mode')
     model.eval()
     save_motion = []
     save_len_param = []
+
     for i in range(len(lens_array)):
         out_path = ''
         if out_path == '':
@@ -164,7 +167,9 @@ def main():
         #     shutil.rmtree(out_path)
         os.makedirs(out_path, exist_ok=True)
 
-        for j in range(5):
+        rep = args.num_repetitions
+
+        for j in range(rep):
             all_motions = []
             all_lengths = []
             all_text = []
@@ -172,16 +177,11 @@ def main():
             if args.guidance_param != 1:
                 model_kwargs['y']['scale'] = torch.ones(1, device=dist_util.dev()) * args.guidance_param
 
-            if j == 0:
-                num_samples = 100
-            else: 
-                num_samples = 2
+            num_samples = args.num_samples
                 
-            # print('eval_K_params[i].unsqueeze(0).repeat(20,1,1,1)', eval_K_params[i].unsqueeze(0).repeat(20,1,1,1).shape)
             sample_fn = diffusion.p_sample_loop
             sample = sample_fn(
                 model,
-                # (args.batch_size, model.njoints, model.nfeats, n_frames),  # BUG FIX - this one caused a mismatch between training and inference
                 (num_samples, model.njoints, model.nfeats, 196),  # BUG FIX
                 eval_K_params[i].unsqueeze(0),
                 eval_len_param[i].unsqueeze(0),
@@ -193,7 +193,6 @@ def main():
                 dump_steps=None,
                 noise=None,
                 const_noise=False,
-                partial_corr_noise=args.partial_corr_noise
             )        
             
                     
@@ -222,7 +221,7 @@ def main():
             print('all_motions', len(all_motions)) # frames
             motion = all_motions[0].transpose(2, 0, 1)
             # if j < 5 : 
-            plot_3d_motion(out_path+'/eval_result_lens_'+lens_str[i]+'_rep_'+str(j)+'.gif', skeleton, motion, dataset=args.dataset, title='length :'+str(lens_array[i]), fps=20)
+            plot_3d_motion(out_path, '/eval_result_lens_'+lens_str[i]+'_rep_'+str(j)+'.gif', skeleton, motion, dataset=args.dataset, title='length :'+str(lens_array[i]), fps=20)
             
             if j == 0:
                 motion = all_motions.transpose(0, 3, 1, 2)
@@ -232,6 +231,7 @@ def main():
             
     abs_path = os.path.abspath(out_path)
     print(f'[Done] Results are at [{abs_path}]')
+
     with open(out_path+'/sampled_motion_lens.pkl', 'wb') as f :
         pkl.dump(save_motion, f)
 
@@ -292,4 +292,3 @@ def load_dataset(args, max_frames, n_frames):
 
 if __name__ == "__main__":
     main()
-

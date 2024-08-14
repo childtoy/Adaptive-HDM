@@ -235,8 +235,10 @@ if __name__ == '__main__':
     log_file = os.path.join(os.path.dirname(args.model_path), 'eval_humanml_{}_{}'.format(name, niter))
     if args.guidance_param != 1.:
         log_file += f'_gscale{args.guidance_param}'
+    ckpt = int(''.join(filter(str.isdigit, args.model_path.split('/')[-1])))
+    ckpt = str(ckpt // 1000)+'K' if ckpt % 1000==0 else ckpt
     log_file += f'_{args.eval_mode}'
-    log_file += '.log'
+    log_file += f'_all_{ckpt}.log'
 
     print(f'Will save to log file [{log_file}]')
 
@@ -280,7 +282,7 @@ if __name__ == '__main__':
 
     logger.log("Creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(args, gen_loader)
-
+    
     logger.log(f"Loading checkpoints from [{args.model_path}]...")
     state_dict = torch.load(args.model_path, map_location='cpu')
     load_model_wo_clip(model, state_dict)
@@ -296,7 +298,8 @@ if __name__ == '__main__':
         ################
         'vald': lambda: get_mdm_loader(
             model, diffusion, args.batch_size,
-            gen_loader, mm_num_samples, mm_num_repeats, gt_loader.dataset.opt.max_motion_length, num_samples_limit, args.guidance_param
+            gen_loader, mm_num_samples, mm_num_repeats, 
+            gt_loader.dataset.opt.max_motion_length, num_samples_limit, args.guidance_param
         )
     }
 

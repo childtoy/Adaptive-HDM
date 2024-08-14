@@ -3,7 +3,6 @@ import numpy as np
 import torch as th
 
 from .gaussian_diffusion import GaussianDiffusion
-from .gaussian_GPdiffusion import GaussianDiffusion_GP
 
 def space_timesteps(num_timesteps, section_counts):
     """

@@ -29,7 +29,7 @@ from data_loaders.humanml.scripts.motion_process import recover_from_ric
 from cmib.model.skeleton import (Skeleton, sk_joints_to_remove, sk_offsets, sk_parents, sk_skeleton_part)
 from data_loaders.tensors import collate
 import pickle as pkl
-from LPM.model import LengthPredctionUnet
+from lpm.model import LengthPredctionUnet
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -95,9 +95,9 @@ class TrainLoop:
             self.num_len = len(self.param_lenK['K_param'])
             self.K_param = torch.Tensor(self.param_lenK['K_param']).to(self.device)
             template = self.param_lenK['template']
+            self.template = torch.Tensor(template).repeat(self.batch_size, 1,1,1).to(self.device)
         else : 
             self.param_lenK = None
-        self.template = torch.Tensor(template).repeat(self.batch_size, 1,1,1).to(self.device)
 
         self.schedule_sampler_type = 'uniform'        
         self.schedule_sampler = create_named_schedule_sampler(self.schedule_sampler_type, diffusion)
@@ -134,6 +134,7 @@ class TrainLoop:
                 dist_util.load_state_dict(
                     resume_checkpoint, map_location=dist_util.dev()
                 )
+                ,strict=False
             )
 
     def _load_optimizer_state(self):
@@ -150,10 +151,9 @@ class TrainLoop:
 
     def _load_length_module(self):
         
-        model_pth = './ckpt_length196.pt'
+        model_pth = './save/final_lpm.pt'
         length_module = LengthPredctionUnet(
             name                 = 'unet',
-            length               = 60, 
             dims                 = 1,
             n_in_channels        = 1,
             n_base_channels      = 128,
@@ -197,20 +197,12 @@ class TrainLoop:
                 true_length = true_length.float()
             output = self.length_module(motion, c=true_length)
         _, pred_idx = torch.max(output.data, 1)
-        # output = pred_idx
-        # pred = None
-        
         pred = self.cls_value[pred_idx]
-        
-        # print('pred', pred)
+
         return pred, pred_idx
 
     def _cal_corr_mat(self, data_shape, pred_idx, K_param_bag, true_length, target_idx_array=[1,2]) : 
         # target idx_array : idx of joints which only used root xz
-        # batch_size = data_shape[0]
-        # dim_size = data_shape[1]
-        # pred_idx= pred_idx.reshape(batch_size, len(target_idx_array)*6)
-        # pred_K_params = torch.Tensor(K_param_bag[0]).repeat(batch_size, dim_size,1,1)
         pred_K_params = self.template.clone()
         if self.args.corr_mode == 'R_trsrot' : 
             pred_K_params[:, [0, 1, 2, 3, 193, 194, 195]] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
@@ -222,14 +214,6 @@ class TrainLoop:
             pred_K_params[:,4:67] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
         elif self.args.corr_mode == 'LBody' :
             pred_K_params[:,4:22] = K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)
-        # Train if all joint 
-        
-        # pred_K_params = torch.Tensor(K_param_bag[pred_idx].reshape(self.batch_size,-1,196,196)).to(self.device)
-
-        # for i in range(data_shape[0]):
-        #     for idx, j in enumerate(target_idx_array):
-        #         for k in range(6):
-        #             pred_K_params[i, 6*j+k] = torch.Tensor(K_param_bag[pred_idx[i,idx*6+k]])
         return pred_K_params
         
     def run_loop(self):
@@ -247,29 +231,6 @@ class TrainLoop:
                 if self.args.corr_noise :        
                     # B D 1 L 
                     B, D, _, L = motion.shape
-                    if self.args.augmentation:
-                        ratio = torch.Tensor([0.6, 0.8, 1.0, 1.2]).to(self.device)
-                        ratio_idx = np.random.choice(4, B)
-                        true_length = cond['y']['lengths']
-                        aug_true_length = true_length * ratio[ratio_idx]
-                        # motion interpolation
-                        augmented_motions = []
-                        for i in range(B):
-                            scale_factor = float(ratio[ratio_idx[i]])
-                            aug_motion_i = motion[i, :, :, :true_length[i]].unsqueeze(0)
-                            augmented_motion_i = F.interpolate(aug_motion_i,scale_factor=(1, scale_factor))
-                            if augmented_motion_i.shape[-1] < L:
-                                augmented_motion_i = torch.cat([augmented_motion_i,
-                                        torch.zeros((1, D, 1, L - augmented_motion_i.shape[-1])).to(self.device)
-                                        ], dim=-1)
-                            else:
-                                augmented_motion_i = augmented_motion_i[:, :, :, :L]
-                            augmented_motions.append(augmented_motion_i)                            
-                        motion = torch.cat(augmented_motions, dim=0).to(self.device)
-                        # for changing true length of cond['y']
-                        over_indices = torch.where(aug_true_length > L)[0]
-                        aug_true_length[over_indices] = L
-                        cond['y']['lengths'] = aug_true_length.to(self.device)
                     if self.args.corr_mode == 'R_trsrot' : 
                         input_motion = motion[:,[0, 1, 2, 3, 193, 194, 195],:,:]
                         B_, D_, _, L_ = input_motion.shape
@@ -391,8 +352,8 @@ class TrainLoop:
                 self.model,
                 # (args.batch_size, model.njoints, model.nfeats, n_frames),  # BUG FIX - this one caused a mismatch between training and inference
                 (1, self.model.njoints, self.model.nfeats, 196),  # BUG FIX
-                eval_K_params[i].unsqueeze(0),
-                eval_len_param[i].unsqueeze(0),
+                eval_K_params[i].unsqueeze(0) if eval_K_params is not None else None,
+                eval_len_param[i].unsqueeze(0) if eval_len_param is not None else None,
                 clip_denoised=False,
                 model_kwargs=model_kwargs,
                 skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
@@ -401,7 +362,6 @@ class TrainLoop:
                 dump_steps=None,
                 noise=None,
                 const_noise=False,
-                partial_corr_noise=self.args.partial_corr_noise
             )        
             
                     # Recover XYZ *positions* from HumanML3D vector representation
@@ -428,43 +388,11 @@ class TrainLoop:
             skeleton = paramUtil.t2m_kinematic_chain
             motion = all_motions[0].transpose(2, 0, 1)
             if i == 0 :
-                plot_3d_motion(self.save_dir+'/eval_result_fast_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 0.03', fps=20)
+                plot_3d_motion(self.save_dir,'/eval_result_fast_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 0.03', fps=20)
             else : 
-                plot_3d_motion(self.save_dir+'/eval_result_slow_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 1.0', fps=20)
+                plot_3d_motion(self.save_dir,'/eval_result_slow_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 1.0', fps=20)
         
         self.model.train()
-        # if self.eval_wrapper is not None:
-        #     print('Running evaluation loop: [Should take about 90 min]')
-        #     log_file = os.path.join(self.save_dir, f'eval_humanml_{(self.step + self.resume_step):09d}.log')
-        #     diversity_times = 300
-        #     mm_num_times = 0  # mm is super slow hence we won't run it during training
-        #     eval_dict = eval_humanml.evaluation(
-        #         self.eval_wrapper, self.eval_gt_data, self.eval_data, log_file,
-        #         replication_times=self.args.eval_rep_times, diversity_times=diversity_times, mm_num_times=mm_num_times, run_mm=False)
-        #     print(eval_dict)
-        #     for k, v in eval_dict.items():
-        #         if k.startswith('R_precision'):
-        #             for i in range(len(v)):
-        #                 self.train_platform.report_scalar(name=f'top{i + 1}_' + k, value=v[i],
-        #                                                   iteration=self.step + self.resume_step,
-        #                                                   group_name='Eval')
-        #         else:
-        #             self.train_platform.report_scalar(name=k, value=v, iteration=self.step + self.resume_step,
-        #                                               group_name='Eval')
-
-        # elif self.dataset in ['humanact12', 'uestc']:
-        #     eval_args = SimpleNamespace(num_seeds=self.args.eval_rep_times, num_samples=self.args.eval_num_samples,
-        #                                 batch_size=self.args.eval_batch_size, device=self.device, guidance_param = 1,
-        #                                 dataset=self.dataset, unconstrained=self.args.unconstrained,
-        #                                 model_path=os.path.join(self.save_dir, self.ckpt_file_name()))
-        #     eval_dict = eval_humanact12_uestc.evaluate(eval_args, model=self.model, diffusion=self.diffusion, data=self.data.dataset)
-        #     print(f'Evaluation results on {self.dataset}: {sorted(eval_dict["feats"].items())}')
-        #     for k, v in eval_dict["feats"].items():
-        #         if 'unconstrained' not in k:
-        #             self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval')
-        #         else:
-        #             self.train_platform.report_scalar(name=k, value=np.array(v).astype(float).mean(), iteration=self.step, group_name='Eval Unconstrained')
-
         end_eval = time.time()
         print(f'Evaluation time: {round(end_eval-start_eval)/60}min')
 
@@ -485,54 +413,7 @@ class TrainLoop:
             micro_cond = cond
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], self.device)
-            
-            # n_joints = 22 
-            # sample = self.data.dataset.t2m_dataset.inv_transform(batch.cpu().permute(0, 2, 3, 1)).float()
-            # sample = recover_from_ric(sample, n_joints)
-            # sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1)
-
-            # rot2xyz_pose_rep = 'xyz'
-            # rot2xyz_mask = None 
-            # sample = self.model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
-            #                     jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
-            #                     get_rotations_back=False)
-            # all_motions = []
-            # all_motions.append(sample.cpu().numpy())
-            # all_motions = np.concatenate(all_motions, axis=0)
-            # all_motions = all_motions[:1]  # [bs, njoints, 6, seqlen]
-            # skeleton = paramUtil.t2m_kinematic_chain
-            # motion = all_motions[0].transpose(2, 0, 1)
-            # plot_3d_motion(self.save_dir+'/eval_result_'+str(self.step)+'.mp4', skeleton, motion, dataset=self.args.dataset, title='a man waves his hand', fps=20)
-            
-            
-            
-            # print('batch', batch.shape)
-            # sample = batch.view(-1,23,6,196)  
-            # # sample = torch.cat((sample[:,:21],torch.zeros([64,3,6,196]).to(sample.device),sample[:,-1].unsqueeze(1)),dim=1)
-            # std_data, mean_data = self.data.dataset.t2m_dataset.return_scaler
-            # print(std_data.shape)
-            # print(mean_data.shape)
-            # # sample = self.data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()            
-            
-            
-            # print('sample shape', sample.shape)
-            # # rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(args.batch_size, n_frames).bool()
-            # rot2xyz_mask = None
-            # sample = self.model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep='rot6d', glob=True, translation=True,
-            #                     jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
-            #                     get_rotations_back=False)
-            # sample = sample.cpu().numpy()
-            # sample = sample[0].transpose(2,0,1)
-            # print(sample.shape)
-            # out_path = './'
-            # save_file = 'gt_motion.gif'
-            # skeleton = paramUtil.t2m_kinematic_chain
-            # animation_save_path = os.path.join(out_path, save_file)
-            # plot_3d_motion(animation_save_path, skeleton, sample, dataset='humanml', title='gt', fps=20)
-
-            # sys.exit()
-            # self.pred_K_param = None
-            # self.pred_lens = None
+       
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,
@@ -542,7 +423,6 @@ class TrainLoop:
                 len_param=self.pred_lens,
                 model_kwargs=micro_cond,
                 dataset=self.data.dataset,
-                partial_corr_noise=self.args.partial_corr_noise
             )
 
             if last_batch or not self.use_ddp:
@@ -561,9 +441,6 @@ class TrainLoop:
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
             self.mp_trainer.backward(loss)
-            # self.model.eval()
-            # self.evaluate()
-            # self.model.train()
 
     def _anneal_lr(self):
         if not self.lr_anneal_steps:

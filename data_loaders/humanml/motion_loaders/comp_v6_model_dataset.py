@@ -1,10 +1,15 @@
 import torch
 from data_loaders.humanml.networks.modules import *
 from data_loaders.humanml.networks.trainers import CompTrainerV6
+from data_loaders.humanml.scripts.motion_process import recover_from_ric
 from torch.utils.data import Dataset, DataLoader
 from os.path import join as pjoin
 from tqdm import tqdm
 from utils import dist_util
+import pickle as pkl
+import data_loaders.humanml.utils.paramUtil as paramUtil
+from data_loaders.humanml.utils.plot_script import plot_3d_motion
+from lpm.model import LengthPredctionUnet
 
 def build_models(opt):
     if opt.text_enc_mod == 'bigru':
@@ -145,7 +150,8 @@ class CompV6GeneratedDataset(Dataset):
 
 class CompMDMGeneratedDataset(Dataset):
 
-    def __init__(self, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, max_motion_length, num_samples_limit, scale=1.):
+    def __init__(self, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, 
+                 max_motion_length, num_samples_limit, scale=1., len_param=None):
         self.dataloader = dataloader
         self.dataset = dataloader.dataset
         assert mm_num_samples < len(dataloader.dataset)
@@ -172,10 +178,66 @@ class CompMDMGeneratedDataset(Dataset):
 
         model.eval()
 
-
+        with open('./HumanML3D_K_param_data196_fps20_dim263_len10.pkl', 'rb') as f : 
+            param_lenK = pkl.load(f)    
+            num_len = len(param_lenK['K_param'])
+            K_param = torch.Tensor(param_lenK['K_param']).to(dist_util.dev())
+            K_template = param_lenK['template']
+            K_template = torch.Tensor(K_template).repeat(dataloader.batch_size,1,1,1)
+    
+        length_module = LengthPredctionUnet(
+            name                 = 'unet',
+            dims                 = 1,
+            n_in_channels        = 1,
+            n_base_channels      = 128,
+            n_emb_dim            = 128,
+            n_cond_dim           = 1,
+            n_time_dim           = 0,
+            n_enc_blocks         = 7, # number of encoder blocks
+            n_groups             = 16, # group norm paramter
+            n_heads              = 4, # number of heads in QKV attention
+            actv                 = nn.SiLU(),
+            kernel_size          = 3, # kernel size (3)
+            padding              = 1, # padding size (1)
+            use_attention        = False,
+            skip_connection      = True, # additional skip connection
+            chnnel_multiples     = [1,2,2,2,4,4,8],
+            updown_rates         = [1,1,2,1,2,1,2],
+            use_scale_shift_norm = True,
+            device               = dist_util.dev(),
+        ) # input:[B x C x L] => output:[B x C x L]
+        length_module.load_state_dict(torch.load('./final_lpm.pt')['model_state_dict'])
+        length_module.to(dist_util.dev())
+        length_module.eval()
+        
+        cls_value = torch.Tensor(
+            [0.033     , 0.14044444, 
+            0.24788889, 0.35533333, 
+            0.46277778, 0.67766667, 
+            1.        ]
+        ).to(dist_util.dev())
+        
         with torch.no_grad():
-            for i, (motion, model_kwargs) in tqdm(enumerate(dataloader)):
-
+            for i, (motion, model_kwargs) in tqdm(enumerate(dataloader), total=len(dataloader)):
+                B, D, _, L = motion.shape
+                input_motion = motion[:, 1:3, :, :].to(dist_util.dev())
+                B_, D_, _, L_ = input_motion.shape
+                input_motion = input_motion.reshape(B_ * D_, 1, L_)
+                true_length = model_kwargs['y']['lengths'].repeat_interleave(D_).to(dist_util.dev(), dtype=torch.float)
+                
+                with torch.no_grad():
+                    output = length_module(input_motion, c=true_length)
+                _, pred_idx = torch.max(output.data, 1)
+                len_param = cls_value[pred_idx]
+                len_param = len_param.reshape(B_, D_)
+                pred_idx = pred_idx.reshape(B_, D_)
+                
+                eval_K_params = torch.zeros((dataloader.batch_size,263,196,196)).to(dist_util.dev())
+                eval_K_params[:,1:3] = K_param[pred_idx]
+                
+                eval_len_param = torch.ones([B, D]).to(dist_util.dev()) * 0.033
+                eval_len_param[:,1:3] = len_param
+            
                 if num_samples_limit is not None and len(generated_motion) >= num_samples_limit:
                     break
 
@@ -190,11 +252,14 @@ class CompMDMGeneratedDataset(Dataset):
                 is_mm = i in mm_idxs
                 repeat_times = mm_num_repeats if is_mm else 1
                 mm_motions = []
+
                 for t in range(repeat_times):
 
                     sample = sample_fn(
                         model,
                         motion.shape,
+                        eval_K_params,
+                        eval_len_param,
                         clip_denoised=clip_denoised,
                         model_kwargs=model_kwargs,
                         skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
@@ -205,6 +270,20 @@ class CompMDMGeneratedDataset(Dataset):
                         const_noise=False,
                         # when experimenting guidance_scale we want to nutrileze the effect of noise on generation
                     )
+
+                    # n_joints = 22 if sample.shape[1] == 263 else 21
+                    # sample = dataloader.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
+                    # sample = recover_from_ric(sample, n_joints)
+                    # sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1)
+
+                    # rot2xyz_pose_rep = 'xyz' if  model.data_rep in ['xyz', 'hml_vec'] else model.data_rep
+                    # rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(1, 196).bool()
+                    # sample = model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
+                    #                     jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
+                    #                     get_rotations_back=False)
+                    # skeleton = paramUtil.t2m_kinematic_chain
+                    # import ipdb;ipdb.set_trace()
+                    # plot_3d_motion('result.gif', skeleton, sample[0].cpu().numpy().transpose(2, 0, 1), dataset='humanml', title='sample', fps=20)
 
                     if t == 0:
                         sub_dicts = [{
@@ -223,7 +302,6 @@ class CompMDMGeneratedDataset(Dataset):
                         mm_motions += [{'motion': sample[bs_i].squeeze().permute(1, 0).cpu().numpy(),
                                         'length': model_kwargs['y']['lengths'][bs_i].cpu().numpy(),
                                         } for bs_i in range(dataloader.batch_size)]
-
                 if is_mm:
                     mm_generated_motions += [{
                                     'caption': model_kwargs['y']['text'][bs_i],

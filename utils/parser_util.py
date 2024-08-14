@@ -71,8 +71,6 @@ def add_diffusion_options(parser):
     group.add_argument("--diffusion_steps", default=1000, type=int,
                        help="Number of diffusion steps (denoted T in the paper)")
     group.add_argument("--sigma_small", default=True, type=bool, help="Use smaller sigma values.")
-    group.add_argument("--noise_blend", default=False, type=bool, help="Correlated noise + Gaussian")
-    group.add_argument("--pred_xstart", action='store_true', help="Prediction xstart. If false pred noise.")
 
 def add_model_options(parser):
     group = parser.add_argument_group('model')
@@ -149,10 +147,6 @@ def add_training_options(parser):
                        help="logging wandb")
     group.add_argument("--corr_mode", default='', type=str,
                     help="Target joint for corr noise")
-    group.add_argument("--partial_corr_noise", default=None, type=int,
-                    help="The start time step to apply corr noise")
-    group.add_argument("--augmentation", action='store_true',
-                    help="for data augmentation")
     
 def add_sampling_options(parser):
     group = parser.add_argument_group('sampling')
@@ -192,7 +186,7 @@ def add_generate_options(parser):
                        help="A text prompt to be generated. If empty, will take text prompts from dataset.")
     group.add_argument("--action_name", default='', type=str,
                        help="An action name to be generated. If empty, will take text prompts from dataset.")
-
+    group.add_argument("--corr_noise", action='store_true', help="Use correlate noise.")
 
 def add_edit_options(parser):
     group = parser.add_argument_group('edit')
@@ -222,7 +216,7 @@ def add_evaluation_options(parser):
                             "full (a2m only) - 20 repetitions.")
     group.add_argument("--guidance_param", default=2.5, type=float,
                        help="For classifier-free sampling - specifies the s parameter, as defined in the paper.")
-
+    # group.add_argument("--len_param", required=True, type=float,)
 
 def get_cond_mode(args):
     if args.unconstrained:
