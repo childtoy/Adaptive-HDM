@@ -52,8 +52,8 @@ bash prepare/download_t2m_evaluators.sh
 
 ## Pre-Trained model
 
-- [Length Prediction Module]()
-- [Text-to-motion]()
+- [Length Prediction Module](https://drive.google.com/file/d/19kDnLs3FKX24_fZXWhdlcQq27-k8zUD_/view?usp=sharing)
+- [Text-to-motion](https://drive.google.com/file/d/1L9lMFo3L0KZPVbRUTMpAsb95ELsfKtPE/view?usp=sharing)
 
 Unzip and place them in `./save/`.
 
