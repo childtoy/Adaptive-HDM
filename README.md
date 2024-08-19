@@ -5,12 +5,12 @@ This repo is the official Pytorch implementation of Adaptive-HDM: "[Adaptive Hil
 <img src="./asset/overview.png">
 
 ## Generated Samples
-<figure class='sample'>
-<img src="./asset/lens_0.03.gif", width=24%>
-<img src="./asset/lens_0.24.gif", width=24%>
-<img src="./asset/lens_0.46.gif", width=24%>
-<img src="./asset/lens_1.00.gif", width=24%>
-</figure>
+<p align="center">
+  <img src="./asset/lens_0.03.gif", width=20%>
+  <img src="./asset/lens_0.24.gif", width=20%>
+  <img src="./asset/lens_0.46.gif", width=20%>
+  <img src="./asset/lens_1.00.gif", width=20%>
+</p>
 
 ## Environment <!--Installation-->
 
