@@ -1,6 +1,6 @@
 # Adaptive Hilbert Diffusion Models for Controllable Smoothness in Continuous Function Generation
 
-This repo is the official Pytorch implementation of Adaptive-HDM: "[Adaptive Hilbert Diffusion Models for Controllable Smoothness in Continuous Function Generation]()".
+This repo is the official Pytorch implementation of Adaptive-HDM(Adaptive Hilbert Diffusion Models for Controllable Smoothness in Continuous Function Generation). This code is based on the [MDM](https://github.com/GuyTevet/motion-diffusion-model/tree/main).
 
 <img src="./asset/overview.png">
 
