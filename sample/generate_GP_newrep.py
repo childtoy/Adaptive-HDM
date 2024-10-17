@@ -19,7 +19,9 @@ import shutil
 from data_loaders.tensors import collate
 import pickle as pkl
 from data_loaders.humanml.utils.paramUtil import t2m_kinematic_chain, t2m_raw_offsets
-from data_loaders.humanml.utils.skeleton import Skeleton
+from data_loaders.humanml.utils.rotation_conversion import cont6d_to_matrix_np, cont6d_to_matrix,matrix_to_quaternion
+from data_loaders.humanml.utils.skeleton import Skeleton, skel_joints
+
 def main():
     args = generate_args()
     fixseed(args.seed)
@@ -154,6 +156,11 @@ def main():
     save_motion = []
     save_len_param = []
 
+    n_raw_offsets = torch.from_numpy(t2m_raw_offsets)
+    kinematic_chain = t2m_kinematic_chain
+    skeleton = Skeleton(n_raw_offsets, kinematic_chain, args.device)
+
+
     for i in range(len(lens_array)):
         out_path = ''
         if out_path == '':
@@ -196,17 +203,31 @@ def main():
                 const_noise=False,
             )        
             
-                    
-            n_joints = 22 if sample.shape[1] == 263 else 21
-            sample = data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
-            sample = recover_from_ric(sample, n_joints)
-            sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1)
+            motion = sample.squeeze().permute(0,2,1)
+            rot6d, r_pos = recover_from_rot(motion, 22)
+            rot6d = rot6d.reshape(r_pos.shape[0],r_pos.shape[1],22,6)
+            n_batch, n_frames, n_joints = 1, 196, 22
+            
+            rotation_quat = matrix_to_quaternion(
+                cont6d_to_matrix(rot6d)
+                )
+            print(rotation_quat)
+            rotation_quat = rotation_quat.reshape(64, n_frames, n_joints, 4)
 
-            rot2xyz_pose_rep = 'xyz' if  model.data_rep in ['xyz', 'hml_vec'] else model.data_rep
-            rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(1, 196).bool()
-            sample = model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
-                                jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
-                                get_rotations_back=False)
+            # root_pos = translation
+            local_q_normalized = torch.nn.functional.normalize(rotation_quat, p=2.0, dim=-1)
+            # global_pos, global_q = skeleton_smpl.forward_kinematics_with_rotation5(local_q_normalized, r_pos)
+            joint_rot = local_q_normalized.cpu().numpy().reshape(n_batch*n_frames,n_joints,4)
+            root_trj = r_pos.cpu().numpy().reshape(n_batch*n_frames,3)
+                    
+            new_shape = (n_batch*n_frames, n_joints, 3)
+            skel_joint = torch.Tensor(skel_joints).to(args.device).expand(new_shape)
+            # print(rotation_quat)
+            new_joints = skeleton.forward_kinematics(rotation_quat.reshape(n_batch*n_frames,n_joints,4), r_pos.reshape(n_batch*n_frames,3), skel_joints=skel_joint)
+            
+            new_joints = new_joints.reshape(n_batch, n_frames, n_joints, 3)
+            sample = new_joints                    
+                    
             text_key = 'text' if 'text' in model_kwargs['y'] else 'action_text'
             all_text += model_kwargs['y'][text_key]
             all_motions.append(sample.cpu().numpy())
@@ -217,12 +238,11 @@ def main():
             all_text = all_text[:1]
             all_lengths = np.concatenate(all_lengths, axis=0)[:1]
 
-            skeleton = paramUtil.t2m_kinematic_chain
 
             print('all_motions', len(all_motions)) # frames
             motion = all_motions[0].transpose(2, 0, 1)
             # if j < 5 : 
-            plot_3d_motion(out_path, '/eval_result_lens_'+lens_str[i]+'_rep_'+str(j)+'.gif', skeleton, motion, dataset=args.dataset, title='length :'+str(lens_array[i]), fps=20)
+            plot_3d_motion(out_path, '/eval_result_lens_'+lens_str[i]+'_rep_'+str(j)+'.gif', t2m_kinematic_chain, motion, dataset=args.dataset, title='length :'+str(lens_array[i]), fps=20)
             
             if j == 0:
                 motion = all_motions.transpose(0, 3, 1, 2)
