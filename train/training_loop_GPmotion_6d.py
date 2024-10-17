@@ -26,8 +26,7 @@ from data_loaders.humanml.scripts.motion_process import recover_rot
 import data_loaders.humanml.utils.paramUtil as paramUtil
 
 from data_loaders.humanml.scripts.motion_process import recover_from_ric
-
-from cmib.model.skeleton import (Skeleton, sk_joints_to_remove, sk_offsets, sk_parents, sk_skeleton_part)
+from data_loaders.humanml.utils.skeleton import Skeleton, skel_joints
 from data_loaders.tensors import collate
 import pickle as pkl
 from lpm.model import LengthPredctionUnet
@@ -346,6 +345,18 @@ class TrainLoop:
             eval_K_params = None
             eval_len_param = None
 
+
+        kinematic_chain = t2m_kinematic_chain
+        
+        ref_path = 'dataset/HumanML3D/new_joints/000000.npy'
+        reference_data = torch.from_numpy(np.load(ref_path))
+        reference_data = reference_data.reshape(len(reference_data), -1, 3)
+        # (joints_num, 3)
+        n_raw_offsets = torch.from_numpy(t2m_raw_offsets)
+        kinematic_chain = t2m_kinematic_chain
+        skeleton = Skeleton(n_raw_offsets, kinematic_chain, args.device)
+    
+
         self.model.eval()
         for i in range(2):
             all_motions = []
@@ -367,19 +378,30 @@ class TrainLoop:
                 noise=None,
                 const_noise=False,
             )        
+            motion = sample.squeeze().permute(0,2,1)
+            rot6d, r_pos = recover_from_rot(motion, 22)
+            rot6d = rot6d.reshape(r_pos.shape[0],r_pos.shape[1],22,6)
+            n_batch, n_frames, n_joints = 1, 196, 22
             
-                    # Recover XYZ *positions* from HumanML3D vector representation
-            n_joints = 22 if sample.shape[1] == 263 else 21
-            sample = self.data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
-            sample = recover_from_ric(sample, n_joints)
-            sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1)
+            rotation_quat = matrix_to_quaternion(
+                cont6d_to_matrix(rot6d)
+                )
+            print(rotation_quat)
+            rotation_quat = rotation_quat.reshape(64, n_frames, n_joints, 4)
 
-            rot2xyz_pose_rep = 'xyz' if  self.model.data_rep in ['xyz', 'hml_vec'] else self.model.data_rep
-            rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(1, 196).bool()
-            sample = self.model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
-                                jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
-                                get_rotations_back=False)
-
+            # root_pos = translation
+            local_q_normalized = torch.nn.functional.normalize(rotation_quat, p=2.0, dim=-1)
+            # global_pos, global_q = skeleton_smpl.forward_kinematics_with_rotation5(local_q_normalized, r_pos)
+            joint_rot = local_q_normalized.cpu().numpy().reshape(n_batch*n_frames,n_joints,4)
+            root_trj = r_pos.cpu().numpy().reshape(n_batch*n_frames,3)
+                    
+            new_shape = (n_batch*n_frames, n_joints, 3)
+            skel_joint = torch.Tensor(skel_joints).to(args.device).expand(new_shape)
+            # print(rotation_quat)
+            new_joints = skeleton.forward_kinematics(rotation_quat.reshape(n_batch*n_frames,n_joints,4), r_pos.reshape(n_batch*n_frames,3), skel_joints=skel_joint)
+            
+            new_joints = new_joints.reshape(n_batch, n_frames, n_joints, 3)
+            sample = new_joints
             text_key = 'text' if 'text' in model_kwargs['y'] else 'action_text'
             all_text += model_kwargs['y'][text_key]
             all_motions.append(sample.cpu().numpy())
