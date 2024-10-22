@@ -27,6 +27,7 @@ import data_loaders.humanml.utils.paramUtil as paramUtil
 
 from data_loaders.humanml.scripts.motion_process import recover_from_ric
 from data_loaders.humanml.utils.skeleton import Skeleton, skel_joints
+from data_loaders.humanml.utils.rotation_conversion import cont6d_to_matrix, matrix_to_quaternion
 from data_loaders.tensors import collate
 import pickle as pkl
 from lpm.model import LengthPredctionUnet
@@ -228,10 +229,11 @@ class TrainLoop:
                     break
                 
                 motion = motion.to(self.device)       
+
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
                 if self.args.corr_noise :        
                     # B D 1 L 
-                    B, D, _, L = motion.shape
+                    # B, D, _, L = motion.shape
                     if self.args.corr_mode == 'R_trsrot' : 
                         input_motion = motion[:,[0, 1, 2, 3, 193, 194, 195],:,:]
                         B_, D_, _, L_ = input_motion.shape
@@ -241,17 +243,18 @@ class TrainLoop:
                         pred_lens = pred_lens.reshape(B_, D_)
                         org_lens = (torch.ones([B,D])*0.033).to(self.device)
                         org_lens[:,[0, 1, 2, 3, 193, 194, 195]] = pred_lens
-                    elif self.args.corr_mode == 'R_trs' : 
+                    elif self.args.corr_mode == 'new_rep' : 
                         ######## root + rotation ######
                         joint_rotation = recover_rot(motion.squeeze().permute(0, 2, 1))   
                         input_motion = joint_rotation.view(joint_rotation.shape[0], joint_rotation.shape[1], -1).unsqueeze(-2).permute(0, 3, 2, 1)
+                        motion = input_motion
                         B_, D_, _, L_ = input_motion.shape
                         input_motion = input_motion.reshape(B_*D_, 1, L_)
                         true_length = cond['y']['lengths'].repeat_interleave(D_)
                         pred_lens, pred_idx = self._predict_length(input_motion, true_length)
                         pred_lens = pred_lens.reshape(B_, D_)
-                        org_lens = (torch.ones([B,D])*0.033).to(self.device)
-                        org_lens[:,1:3] = pred_lens
+                        org_lens = (torch.ones([B_,D_])*0.033).to(self.device)
+                        org_lens[:,:] = pred_lens
                     elif self.args.corr_mode == 'all' : 
                         input_motion = motion[:,:,:,:]
                         B_, D_, _, L_ = input_motion.shape
@@ -290,7 +293,44 @@ class TrainLoop:
                     self.pred_idx = None
                     self.pred_K_param = None
 
+                # kinematic_chain = paramUtil.t2m_kinematic_chain
+        
+                # # (joints_num, 3)
+                # n_raw_offsets = torch.from_numpy(paramUtil.t2m_raw_offsets)
+                # skeleton = Skeleton(n_raw_offsets, kinematic_chain, self.args.device)
+                
+                # motion = motion.permute(0, 3, 2, 1)
+                # rot6d, r_pos = motion[0:1, : ,0, :132], motion[0:1, : ,0, 132:135]
+                # # rot6d, r_pos = recover_rot(motion)
+                # rot6d = rot6d.reshape(r_pos.shape[0],r_pos.shape[1],22,6)
+                # n_batch, n_frames, n_joints = 1, 196, 22
+                
+                # rotation_quat = matrix_to_quaternion(
+                #     cont6d_to_matrix(rot6d)
+                #     )
+                # # print(rotation_quat)
+                # rotation_quat = rotation_quat.reshape(n_batch, n_frames, n_joints, 4)
+
+                # # root_pos = translation
+                # local_q_normalized = torch.nn.functional.normalize(rotation_quat, p=2.0, dim=-1)
+                # # global_pos, global_q = skeleton_smpl.forward_kinematics_with_rotation5(local_q_normalized, r_pos)
+                        
+                # new_shape = (n_batch*n_frames, n_joints, 3)
+                # skel_joint = torch.Tensor(skel_joints).to(self.args.device).expand(new_shape)
+                # # print(rotation_quat)
+
+                # new_joints = skeleton.forward_kinematics(local_q_normalized.reshape(n_batch*n_frames,n_joints,4), r_pos.reshape(n_batch*n_frames,3), skel_joints=skel_joint)
+                
+                # new_joints = new_joints.reshape(n_batch, n_frames, n_joints, 3)
+                # sample = new_joints
+
+                # skeleton_chain = paramUtil.t2m_kinematic_chain
+                # motion = sample[0].cpu().numpy()
+
+                # plot_3d_motion(self.save_dir,f'/sample_fast_'+str(self.step)+'.gif', skeleton_chain, motion, dataset=self.args.dataset, title=f'sample length : 0.03', fps=20)
+
                 self.run_step(motion, cond)
+
                 if self.step % self.log_interval == 0:
                     for k,v in logger.get_current().dumpkvs().items():
                         if k == 'loss':
@@ -325,40 +365,47 @@ class TrainLoop:
         start_eval = time.time()
         
         collate_args = [{'inp': torch.zeros(196), 'tokens': None, 'lengths': 196}] * 1
-        texts = ['a man moves forward']
+        texts = ['a man moves forward', 'a man moves forward', 'a man waves his hand', 'a man waves his hand']
 
-        collate_args = [dict(arg, text=txt) for arg, txt in zip(collate_args, texts)]
-        # collate_args = [{'inp': torch.zeros(60), 'tokens': None, 'lengths': 60}] * 1
-        _, model_kwargs = collate(collate_args)
+        # collate_args = [dict(arg, text=txt) for arg, txt in zip(collate_args, texts)]
+        # # collate_args = [{'inp': torch.zeros(60), 'tokens': None, 'lengths': 60}] * 1
+        # _, model_kwargs = collate(collate_args)
         all_motions = []
         all_lengths = []
         all_text = []
 
         if self.args.corr_noise : 
-            eval_K_params = torch.zeros((2,263,196,196)).to(self.device) 
-            eval_K_params[0,1:3] = self.K_param[0].repeat(2,1,1)
-            eval_K_params[1,1:3] = self.K_param[-1].repeat(2,1,1)
-            eval_len_param = torch.ones((2,263)).to(self.device) * 0.03
-            eval_len_param[0,1:3] = torch.Tensor([0.033]).to(self.device).repeat(2)
-            eval_len_param[1,1:3] = torch.Tensor([1.0]).to(self.device).repeat(2)
+            eval_K_params = torch.zeros((4,138,196,196)).to(self.device) 
+            eval_K_params[0, -6:-3] = self.K_param[0].repeat(3,1,1)
+            eval_K_params[1, -6:-3] = self.K_param[-1].repeat(3,1,1)
+            eval_len_param = torch.ones((4,138)).to(self.device) * 0.03
+            eval_len_param[0, -6:-3] = torch.Tensor([0.033]).to(self.device).repeat(3)
+            eval_len_param[1, -6:-3] = torch.Tensor([1.0]).to(self.device).repeat(3)
+
+            eval_K_params[2, 18:22] = self.K_param[0].repeat(4,1,1)
+            eval_K_params[3, 18:22] = self.K_param[-1].repeat(4,1,1)
+            eval_len_param[2, 18:22] = torch.Tensor([0.033]).to(self.device).repeat(4)
+            eval_len_param[3, 18:22] = torch.Tensor([1.0]).to(self.device).repeat(4)
+
         else : 
             eval_K_params = None
             eval_len_param = None
 
 
-        kinematic_chain = t2m_kinematic_chain
+        kinematic_chain = paramUtil.t2m_kinematic_chain
         
-        ref_path = 'dataset/HumanML3D/new_joints/000000.npy'
-        reference_data = torch.from_numpy(np.load(ref_path))
-        reference_data = reference_data.reshape(len(reference_data), -1, 3)
         # (joints_num, 3)
-        n_raw_offsets = torch.from_numpy(t2m_raw_offsets)
-        kinematic_chain = t2m_kinematic_chain
-        skeleton = Skeleton(n_raw_offsets, kinematic_chain, args.device)
+        n_raw_offsets = torch.from_numpy(paramUtil.t2m_raw_offsets)
+        skeleton = Skeleton(n_raw_offsets, kinematic_chain, self.args.device)
     
 
         self.model.eval()
-        for i in range(2):
+        
+        for i in range(4):
+            collate_args = [dict(arg, text=txt) for arg, txt in zip(collate_args, list(texts[i]))]
+            # collate_args = [{'inp': torch.zeros(60), 'tokens': None, 'lengths': 60}] * 1
+            _, model_kwargs = collate(collate_args)
+
             all_motions = []
             all_lengths = []
             all_text = []
@@ -377,46 +424,42 @@ class TrainLoop:
                 dump_steps=None,
                 noise=None,
                 const_noise=False,
-            )        
-            motion = sample.squeeze().permute(0,2,1)
-            rot6d, r_pos = recover_from_rot(motion, 22)
+            )
+            ########## denormalize ########
+            sample = self.data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float().permute(0, 3, 1, 2)
+            ###############################
+            motion = sample.squeeze(2).permute(0,2,1)
+            rot6d, r_pos = motion[:, : , :132], motion[:, : , 132:135]
+            # rot6d, r_pos = recover_rot(motion)
             rot6d = rot6d.reshape(r_pos.shape[0],r_pos.shape[1],22,6)
             n_batch, n_frames, n_joints = 1, 196, 22
             
             rotation_quat = matrix_to_quaternion(
                 cont6d_to_matrix(rot6d)
                 )
-            print(rotation_quat)
-            rotation_quat = rotation_quat.reshape(64, n_frames, n_joints, 4)
+            # print(rotation_quat)
+            rotation_quat = rotation_quat.reshape(n_batch, n_frames, n_joints, 4)
 
             # root_pos = translation
             local_q_normalized = torch.nn.functional.normalize(rotation_quat, p=2.0, dim=-1)
             # global_pos, global_q = skeleton_smpl.forward_kinematics_with_rotation5(local_q_normalized, r_pos)
-            joint_rot = local_q_normalized.cpu().numpy().reshape(n_batch*n_frames,n_joints,4)
-            root_trj = r_pos.cpu().numpy().reshape(n_batch*n_frames,3)
                     
             new_shape = (n_batch*n_frames, n_joints, 3)
-            skel_joint = torch.Tensor(skel_joints).to(args.device).expand(new_shape)
+            skel_joint = torch.Tensor(skel_joints).to(self.args.device).expand(new_shape)
             # print(rotation_quat)
-            new_joints = skeleton.forward_kinematics(rotation_quat.reshape(n_batch*n_frames,n_joints,4), r_pos.reshape(n_batch*n_frames,3), skel_joints=skel_joint)
+
+            new_joints = skeleton.forward_kinematics(local_q_normalized.reshape(n_batch*n_frames,n_joints,4), r_pos.reshape(n_batch*n_frames,3), skel_joints=skel_joint)
             
             new_joints = new_joints.reshape(n_batch, n_frames, n_joints, 3)
             sample = new_joints
-            text_key = 'text' if 'text' in model_kwargs['y'] else 'action_text'
-            all_text += model_kwargs['y'][text_key]
-            all_motions.append(sample.cpu().numpy())
-            all_lengths.append(model_kwargs['y']['lengths'].cpu().numpy())
-            all_motions = np.concatenate(all_motions, axis=0)
-            all_motions = all_motions[:1]  # [bs, njoints, 6, seqlen]
-            all_text = all_text[:1]
-            all_lengths = np.concatenate(all_lengths, axis=0)[:1]
 
-            skeleton = paramUtil.t2m_kinematic_chain
-            motion = all_motions[0].transpose(2, 0, 1)
-            if i == 0 :
-                plot_3d_motion(self.save_dir,'/eval_result_fast_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 0.03', fps=20)
+            skeleton_chain = paramUtil.t2m_kinematic_chain
+            motion = sample[0].cpu().numpy()
+
+            if i % 2 == 0:
+                plot_3d_motion(self.save_dir,f'/{texts[i]}_fast_'+str(self.step)+'.gif', skeleton_chain, motion, dataset=self.args.dataset, title=f'{texts[i]} length : 0.03', fps=20)
             else : 
-                plot_3d_motion(self.save_dir,'/eval_result_slow_'+str(self.step)+'.gif', skeleton, motion, dataset=self.args.dataset, title='length : 1.0', fps=20)
+                plot_3d_motion(self.save_dir,f'/{texts[i]}_slow_'+str(self.step)+'.gif', skeleton_chain, motion, dataset=self.args.dataset, title=f'{texts[i]} length : 1.0', fps=20)
         
         self.model.train()
         end_eval = time.time()
